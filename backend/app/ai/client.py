@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.notify import notify_permission
 from app.core.secrets import get_secret
-from app.models.ai import AgentConfiguration, AIUsageLog, Budget, ModelPrice
+from app.ai import providers
+from app.models.ai import AgentConfiguration, AIModel, AIUsageLog, Budget, ModelPrice
 
 log = logging.getLogger("ai")
 
@@ -117,6 +118,11 @@ def call(db: Session, agent_key: str, *, system: str, user: str | list, schema: 
     """
     cfg = agent_config(db, agent_key)
     _check_budget_before(db)
+    model = db.scalar(select(AIModel).where(AIModel.model_id == cfg.model_id))
+    provider = model.provider if model else "anthropic"
+    if provider != "anthropic":
+        return _call_other(db, cfg, model, system=system, user=user, schema=schema, history=history, user_id=user_id,
+                           ref_type=ref_type, ref_id=ref_id, job_id=job_id)
 
     output_config: dict = {"effort": cfg.effort or "medium"}
     if schema:
@@ -169,6 +175,73 @@ def call(db: Session, agent_key: str, *, system: str, user: str | list, schema: 
             db.commit()
             raise AIError(f"Claude API error {e.status_code}: {e.message}") from e
     raise AIError(f"Claude API unavailable after {cfg.max_retries + 1} attempts: {last_err}")
+
+
+PROVIDER_NAMES = {"openai": "OpenAI", "google": "Google Gemini", "azure_openai": "Azure OpenAI"}
+
+
+def _call_other(db: Session, cfg: AgentConfiguration, model: AIModel, *, system: str, user: str | list, schema: dict | None,
+                history: list | None, user_id, ref_type: str, ref_id, job_id) -> dict | str:
+    """OpenAI, Azure OpenAI and Gemini. Effort settings apply to Claude only and are ignored here."""
+    name = PROVIDER_NAMES.get(model.provider, model.provider)
+    key = get_secret(db, model.provider)
+    if not key:
+        raise AIError(f"No {name} API key is configured. Add one in Administration > API keys.")
+    text_user = user if isinstance(user, str) else json.dumps(user)
+    sys_prompt = f"{GROUNDING_RULES}\n\n{system}"
+    if schema:
+        sys_prompt += "\n\nRespond only with JSON that matches the required schema."
+    hist = [{"role": m["role"], "content": m["content"] if isinstance(m["content"], str) else json.dumps(m["content"])}
+            for m in (history or [])]
+
+    def invoke():
+        if model.provider == "openai":
+            return providers.openai_chat(key, model.model_id, sys_prompt, hist, text_user, schema, cfg.max_output_tokens, cfg.timeout_seconds)
+        if model.provider == "azure_openai":
+            return providers.azure_chat(key, model.endpoint, model.model_id, sys_prompt, hist, text_user, schema,
+                                        cfg.max_output_tokens, cfg.timeout_seconds)
+        if model.provider == "google":
+            return providers.gemini_chat(key, model.model_id, sys_prompt, hist, text_user, schema, cfg.max_output_tokens, cfg.timeout_seconds)
+        raise AIError(f"Provider '{model.provider}' is not supported for agents")
+
+    last_err: Exception | None = None
+    for attempt in range(cfg.max_retries + 1):
+        t0 = time.monotonic()
+        try:
+            res = invoke()
+        except providers.Retryable as e:
+            last_err = e
+            log_usage(db, user_id=user_id, module=cfg.module, agent_key=cfg.agent_key, model_id=model.model_id,
+                      duration_ms=int((time.monotonic() - t0) * 1000), status="retryable_error",
+                      ref_type=ref_type, ref_id=ref_id, job_id=job_id)
+            db.commit()
+            time.sleep(min(30, 2 ** attempt * 3))
+            continue
+        except providers.ProviderError as e:
+            log_usage(db, user_id=user_id, module=cfg.module, agent_key=cfg.agent_key, model_id=model.model_id,
+                      duration_ms=int((time.monotonic() - t0) * 1000), status="error",
+                      ref_type=ref_type, ref_id=ref_id, job_id=job_id)
+            db.commit()
+            raise AIError(f"{name} error: {str(e).replace(key, '***')}") from e
+        # cost is estimated from the configured model's price row
+        log_usage(db, user_id=user_id, module=cfg.module, agent_key=cfg.agent_key, model_id=model.model_id,
+                  input_tokens=res.input_tokens, output_tokens=res.output_tokens,
+                  duration_ms=int((time.monotonic() - t0) * 1000), status=res.stop,
+                  ref_type=ref_type, ref_id=ref_id, job_id=job_id)
+        _check_budget_after(db)
+        db.commit()
+        if res.stop == "refusal":
+            raise AIError(f"{name} declined this request. Rephrase it or review the input documents.")
+        if res.stop == "max_tokens":
+            raise AIError(f"The {cfg.label} agent hit its output limit ({cfg.max_output_tokens} tokens). "
+                          "Raise the limit in AI configuration or split the input.")
+        if not schema:
+            return res.text
+        try:
+            return json.loads(res.text)
+        except json.JSONDecodeError as e:
+            raise AIError(f"{name} returned output that is not valid JSON. Try a different model for this agent.") from e
+    raise AIError(f"{name} unavailable after {cfg.max_retries + 1} attempts: {last_err}")
 
 
 def doc_block(source_id: str, title: str, text: str, ref: str = "") -> str:

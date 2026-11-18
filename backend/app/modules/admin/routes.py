@@ -184,6 +184,8 @@ class AgentPatch(BaseModel):
 class ModelIn(BaseModel):
     model_id: str
     label: str
+    provider: str = "anthropic"
+    endpoint: str = ""
     input_per_mtok: Decimal = Decimal(0)
     output_per_mtok: Decimal = Decimal(0)
     active: bool = True
@@ -214,10 +216,13 @@ def update_agent(agent_key: str, body: AgentPatch, cu: CurrentUser = Depends(req
     return {"ok": True}
 
 
+MODEL_PROVIDERS = ("anthropic", "openai", "google", "azure_openai")
+
+
 @router.get("/ai/models")
 def list_models(cu: CurrentUser = Depends(require("admin.ai_config", "admin.usage")), db: Session = Depends(get_db)):
     prices = {p.model_id: p for p in db.scalars(select(ModelPrice))}
-    return [{"model_id": m.model_id, "label": m.label, "active": m.active,
+    return [{"model_id": m.model_id, "label": m.label, "active": m.active, "provider": m.provider, "endpoint": m.endpoint,
              "input_per_mtok": prices.get(m.model_id).input_per_mtok if m.model_id in prices else 0,
              "output_per_mtok": prices.get(m.model_id).output_per_mtok if m.model_id in prices else 0}
             for m in db.scalars(select(AIModel).order_by(AIModel.label))]
@@ -225,11 +230,15 @@ def list_models(cu: CurrentUser = Depends(require("admin.ai_config", "admin.usag
 
 @router.put("/ai/models")
 def upsert_model(body: ModelIn, cu: CurrentUser = Depends(require("admin.ai_config")), db: Session = Depends(get_db)):
+    if body.provider not in MODEL_PROVIDERS:
+        raise HTTPException(400, "Provider must be one of: " + ", ".join(MODEL_PROVIDERS))
+    if body.provider == "azure_openai" and not body.endpoint.startswith("https://"):
+        raise HTTPException(400, "Azure OpenAI models need the resource endpoint, e.g. https://myresource.openai.azure.com")
     m = db.scalar(select(AIModel).where(AIModel.model_id == body.model_id))
     if not m:
         m = AIModel(model_id=body.model_id, label=body.label)
         db.add(m)
-    m.label, m.active = body.label, body.active
+    m.label, m.active, m.provider, m.endpoint = body.label, body.active, body.provider, body.endpoint.strip()
     p = db.scalar(select(ModelPrice).where(ModelPrice.model_id == body.model_id))
     if not p:
         p = ModelPrice(model_id=body.model_id)
@@ -293,7 +302,7 @@ def _key_out(db: Session, provider: str, row: ApiCredential | None) -> dict:
             "source": source_of(db, provider), "masked": f"…{row.last4}" if row else "",
             "updated_at": row.updated_at if row else None, "last_tested_at": row.last_tested_at if row else None,
             "last_test_ok": row.last_test_ok if row else None, "last_test_message": row.last_test_message if row else "",
-            "testable": provider in ("anthropic", "voyage"), "custom": provider not in PROVIDERS}
+            "testable": provider in ("anthropic", "voyage", "openai", "google"), "custom": provider not in PROVIDERS}
 
 
 @router.get("/api-keys")
@@ -344,6 +353,9 @@ def test_api_key(provider: str, cu: CurrentUser = Depends(require("admin.api_key
             r = httpx.post("https://api.voyageai.com/v1/embeddings", timeout=20, headers={"Authorization": f"Bearer {key}"},
                            json={"input": ["connection test"], "model": "voyage-3"})
             ok, message = r.status_code == 200, "Connected" if r.status_code == 200 else f"HTTP {r.status_code}: {r.text[:200]}"
+        elif provider in ("openai", "google"):
+            from app.ai.providers import test_key
+            ok, message = True, test_key(provider, key)
         else:
             raise HTTPException(400, "No connection test is available for this provider")
     except HTTPException:

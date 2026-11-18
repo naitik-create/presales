@@ -5,6 +5,13 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 
 ## Unreleased
 
+### Added
+- Agents can use models from **OpenAI**, **Google Gemini** and **Azure OpenAI** as well as Anthropic Claude. Models are
+  added in Administration > AI models with a provider (and the resource endpoint for Azure), then chosen per agent.
+  Calls use each provider's HTTPS API with structured JSON output, retries, usage logging and cost estimates.
+  The provider's key comes from Administration > API keys; screens warn when a selected model has no key.
+- Connection test for OpenAI and Gemini keys.
+
 ### Changed
 - Administration redesigned: grouped side navigation (People and access, AI, Platform, Monitoring) with a title and
   description for each section; no tab scroll arrows.

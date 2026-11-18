@@ -192,6 +192,11 @@ const AGENT_INFO: Record<string, string> = {
   proposal_generation: "Fills proposal template sections from the workspace",
 };
 const MODULE_NAMES: Record<string, string> = { ask: "Ask Motadata", rfp: "RFP Intelligence", demo: "Demo Intelligence" };
+const PROVIDER_LABELS: Record<string, string> = { anthropic: "Anthropic Claude", openai: "OpenAI", google: "Google Gemini", azure_openai: "Azure OpenAI" };
+const MODEL_ID_HINTS: Record<string, string> = {
+  anthropic: "e.g. claude-sonnet-5-5", openai: "the model name from your OpenAI account",
+  google: "the Gemini model name from Google AI Studio", azure_openai: "the deployment name in your Azure OpenAI resource",
+};
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const ktok = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 
@@ -308,13 +313,18 @@ function AI() {
   const agents = useApi<any[]>("/admin/ai/agents");
   const models = useApi<any[]>("/admin/ai/models");
   const emb = useApi<any>("/admin/ai/embedding");
+  const keys = useApi<any[]>("/admin/api-keys");
   const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
   const [configure, setConfigure] = useState<any | null>(null);
   const [modelEdit, setModelEdit] = useState<any | null>(null);
   const [bulkModel, setBulkModel] = useState("");
   if (!agents.data || !models.data || !emb.data) return <Spinner />;
   const label = (id: string) => models.data!.find((m) => m.model_id === id)?.label || id;
-  const modelOpts = models.data.filter((m) => m.active).map((m) => ({ value: m.model_id, label: m.label }));
+  const providerOf = (id: string) => models.data!.find((m) => m.model_id === id)?.provider || "anthropic";
+  const hasKey = (p: string) => !keys.data || keys.data.some((k) => k.provider === p && k.source !== "none");
+  const modelOpts = models.data.filter((m) => m.active).map((m) => ({
+    value: m.model_id, label: `${m.label} · ${PROVIDER_LABELS[m.provider] || m.provider}${hasKey(m.provider) ? "" : " (no key)"}`,
+  }));
   const active = emb.data.configurations.find((c: any) => c.is_active);
   const byModule: Record<string, any[]> = {};
   agents.data.forEach((a) => { (byModule[a.module] ||= []).push(a); });
@@ -357,8 +367,9 @@ function AI() {
                       <div className={cx("font-semibold", !a.enabled && "text-muted")}>{a.label}</div>
                       <div className="text-sm text-muted">{AGENT_INFO[a.agent_key] || ""}</div>
                       <div className="mt-2 flex flex-wrap gap-1">
-                        <Chip>{label(a.model_id)}</Chip>
-                        <Chip>{cap(a.effort)} effort</Chip>
+                        <Chip>{label(a.model_id)}<span className="ml-1 text-muted">· {PROVIDER_LABELS[providerOf(a.model_id)]}</span></Chip>
+                        {providerOf(a.model_id) === "anthropic" && <Chip>{cap(a.effort)} effort</Chip>}
+                        {!hasKey(providerOf(a.model_id)) && <Badge tone="error">No {PROVIDER_LABELS[providerOf(a.model_id)]} key</Badge>}
                         <Chip muted>{ktok(a.max_output_tokens)} output tokens</Chip>
                         <Chip muted>{a.timeout_seconds}s timeout</Chip>
                         <Chip muted>{a.max_retries} {a.max_retries === 1 ? "retry" : "retries"}</Chip>
@@ -377,12 +388,13 @@ function AI() {
         </div>
       </Card>
 
-      <Card title="Models and prices" actions={<Button onClick={() => setModelEdit({ model_id: "", label: "", input_per_mtok: "", output_per_mtok: "", active: true, isNew: true })}><Plus size={16} /> Add model</Button>}>
-        <p className="-mt-1 mb-4 text-sm text-muted">Prices are per million tokens and are used only to estimate cost on the usage screen.</p>
-        <Table head={["Model", "Input price", "Output price", "Agents using it", "Available", ""]}>
+      <Card title="Models and prices" actions={<Button onClick={() => setModelEdit({ model_id: "", label: "", provider: "openai", endpoint: "", input_per_mtok: "", output_per_mtok: "", active: true, isNew: true })}><Plus size={16} /> Add model</Button>}>
+        <p className="-mt-1 mb-4 text-sm text-muted">Add models from Anthropic, OpenAI, Google Gemini or Azure OpenAI, then choose them for any agent. Each provider needs its key in API keys. Prices are per million tokens and are used only to estimate cost.</p>
+        <Table head={["Model", "Provider", "Input price", "Output price", "Agents using it", "Available", ""]}>
           {models.data.map((m) => (
             <tr key={m.model_id}>
               <td><div className="font-semibold">{m.label}</div><div className="text-sm text-muted">{m.model_id}</div></td>
+              <td className="whitespace-nowrap">{PROVIDER_LABELS[m.provider] || m.provider}{!hasKey(m.provider) && <div><Badge tone="error">No key</Badge></div>}</td>
               <td>{money(Number(m.input_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
               <td>{money(Number(m.output_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
               <td>{agents.data!.filter((a) => a.model_id === m.model_id).length}</td>
@@ -420,14 +432,17 @@ function AI() {
       <Modal open={!!configure} title={configure ? `Configure: ${configure.label}` : ""} onClose={() => setConfigure(null)}>
         {configure && <div className="flex flex-col gap-2">
           <p className="text-sm text-muted">{AGENT_INFO[configure.agent_key]}</p>
-          <SettingRow title="Model" help="The Claude model this agent calls.">
+          <SettingRow title="Model" help="The model this agent calls. Models from any provider in the model list can be chosen.">
             <Select className="w-56" value={configure.model_id} onChange={(e) => setConfigure({ ...configure, model_id: e.target.value })}
               options={modelOpts.some((m) => m.value === configure.model_id) ? modelOpts : [{ value: configure.model_id, label: configure.model_id }, ...modelOpts]} />
           </SettingRow>
-          <SettingRow title="Effort" help={EFFORT_INFO[configure.effort]}>
-            <Select className="w-40" value={configure.effort} onChange={(e) => setConfigure({ ...configure, effort: e.target.value })}
-              options={Object.keys(EFFORT_INFO).map((k) => ({ value: k, label: cap(k) }))} />
-          </SettingRow>
+          {!hasKey(providerOf(configure.model_id)) && <Alert tone="warning">No {PROVIDER_LABELS[providerOf(configure.model_id)]} key is saved. Add it in API keys first, or this agent will fail.</Alert>}
+          {providerOf(configure.model_id) === "anthropic" ? (
+            <SettingRow title="Effort" help={EFFORT_INFO[configure.effort]}>
+              <Select className="w-40" value={configure.effort} onChange={(e) => setConfigure({ ...configure, effort: e.target.value })}
+                options={Object.keys(EFFORT_INFO).map((k) => ({ value: k, label: cap(k) }))} />
+            </SettingRow>
+          ) : <p className="py-2 text-sm text-muted">Effort applies to Claude models only and is not used for {PROVIDER_LABELS[providerOf(configure.model_id)]}.</p>}
           <SettingRow title="Maximum output" help="Longest answer the agent may write. Raise it if long outputs are cut off.">
             <NumberInput value={configure.max_output_tokens} unit="tokens" min={256} max={128000} step={1000} onChange={(v) => setConfigure({ ...configure, max_output_tokens: v })} />
           </SettingRow>
@@ -450,7 +465,14 @@ function AI() {
 
       <Modal open={!!modelEdit} title={modelEdit?.isNew ? "Add model" : `Edit ${modelEdit?.label}`} onClose={() => setModelEdit(null)}>
         {modelEdit && <div className="flex flex-col gap-4">
-          <Field label="Model ID" hint="Exactly as the provider names it, e.g. claude-sonnet-5-5"><Input value={modelEdit.model_id} disabled={!modelEdit.isNew} onChange={(e) => setModelEdit({ ...modelEdit, model_id: e.target.value })} /></Field>
+          <Field label="Provider"><Select value={modelEdit.provider || "anthropic"} disabled={!modelEdit.isNew}
+            onChange={(e) => setModelEdit({ ...modelEdit, provider: e.target.value })}
+            options={Object.entries(PROVIDER_LABELS).map(([value, l]) => ({ value, label: l }))} /></Field>
+          {!hasKey(modelEdit.provider || "anthropic") && <Alert tone="warning">No {PROVIDER_LABELS[modelEdit.provider || "anthropic"]} key is saved yet. Add it in API keys.</Alert>}
+          <Field label={modelEdit.provider === "azure_openai" ? "Deployment name" : "Model ID"} hint={`Exactly as the provider names it: ${MODEL_ID_HINTS[modelEdit.provider || "anthropic"]}`}>
+            <Input value={modelEdit.model_id} disabled={!modelEdit.isNew} onChange={(e) => setModelEdit({ ...modelEdit, model_id: e.target.value })} /></Field>
+          {modelEdit.provider === "azure_openai" && <Field label="Resource endpoint" hint="e.g. https://myresource.openai.azure.com">
+            <Input value={modelEdit.endpoint || ""} onChange={(e) => setModelEdit({ ...modelEdit, endpoint: e.target.value })} /></Field>}
           <Field label="Display name"><Input value={modelEdit.label} onChange={(e) => setModelEdit({ ...modelEdit, label: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-4">
             <Field label="Input price (USD per 1M tokens)"><Input type="number" step="any" value={modelEdit.input_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, input_per_mtok: e.target.value })} /></Field>

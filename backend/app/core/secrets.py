@@ -18,11 +18,11 @@ log = logging.getLogger("secrets")
 
 # Providers the application knows. 'used_for' is shown in the admin screen.
 PROVIDERS = {
-    "anthropic": {"label": "Anthropic Claude", "env": "ANTHROPIC_API_KEY", "used_for": "All AI agents", "prefix": "sk-ant-"},
+    "anthropic": {"label": "Anthropic Claude", "env": "ANTHROPIC_API_KEY", "used_for": "Agents set to a Claude model (the default)", "prefix": "sk-ant-"},
     "voyage": {"label": "Voyage AI embeddings", "env": "EXTERNAL_EMBEDDING_API_KEY", "used_for": "External embedding option", "prefix": "pa-"},
-    "openai": {"label": "OpenAI", "env": "", "used_for": "Stored for future use; not used by any feature yet", "prefix": ""},
-    "google": {"label": "Google Gemini", "env": "", "used_for": "Stored for future use; not used by any feature yet", "prefix": ""},
-    "azure_openai": {"label": "Azure OpenAI", "env": "", "used_for": "Stored for future use; not used by any feature yet", "prefix": ""},
+    "openai": {"label": "OpenAI", "env": "", "used_for": "Agents set to an OpenAI model", "prefix": ""},
+    "google": {"label": "Google Gemini", "env": "", "used_for": "Agents set to a Gemini model", "prefix": ""},
+    "azure_openai": {"label": "Azure OpenAI", "env": "", "used_for": "Agents set to an Azure OpenAI deployment", "prefix": ""},
 }
 
 

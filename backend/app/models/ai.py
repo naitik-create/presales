@@ -11,8 +11,10 @@ from app.db import Base, TimestampMixin, utcnow
 class AIModel(Base, TimestampMixin):
     __tablename__ = "ai_models"
     id: Mapped[int] = mapped_column(primary_key=True)
-    model_id: Mapped[str] = mapped_column(String(120), unique=True)
+    model_id: Mapped[str] = mapped_column(String(120), unique=True)  # Azure OpenAI: the deployment name
     label: Mapped[str] = mapped_column(String(120))
+    provider: Mapped[str] = mapped_column(String(40), default="anthropic")  # anthropic | openai | google | azure_openai
+    endpoint: Mapped[str] = mapped_column(String(300), default="")  # Azure OpenAI resource URL
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
