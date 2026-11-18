@@ -170,6 +170,35 @@ function Users() {
   );
 }
 
+const EFFORT_INFO: Record<string, string> = {
+  low: "Fastest and cheapest; for simple, well-defined tasks",
+  medium: "Balanced quality and cost (recommended)",
+  high: "More thorough reasoning; higher cost",
+  xhigh: "Very thorough; for complex documents",
+  max: "Maximum reasoning; slowest and most expensive",
+};
+const AGENT_INFO: Record<string, string> = {
+  ask_motadata: "Answers product questions from approved sources with citations",
+  demo_script: "Writes customer-specific demo storylines from the use-case library",
+  requirement_extraction: "Finds and numbers every requirement in uploaded RFP documents",
+  technical_compliance: "Drafts a compliance status and response for each requirement",
+  rfp_analysis: "Summarises scope, dates, submission rules and mandatory conditions",
+  architecture_sizing: "Recommends deployment architecture and extracts sizing inputs",
+  risk_gap: "Lists product gaps, dependencies, penalties and unclear requirements",
+  pq_tq: "Drafts PQ and TQ responses and lists missing credentials",
+  boq_licensing: "Lists modules, licence metrics and quantities (no prices)",
+  executive_synopsis: "Writes a short management overview",
+  prebid_query: "Drafts clarification questions for the pre-bid meeting",
+  proposal_generation: "Fills proposal template sections from the workspace",
+};
+const MODULE_NAMES: Record<string, string> = { ask: "Ask Motadata", rfp: "RFP Intelligence", demo: "Demo Intelligence" };
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const ktok = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+
+function Chip({ children, muted }: { children: ReactNode; muted?: boolean }) {
+  return <span className={cx("inline-flex items-center whitespace-nowrap rounded border px-2 text-sm", muted ? "border-lightborder text-muted" : "border-border bg-offwhite text-mono-800")}>{children}</span>;
+}
+
 function Roles() {
   const roles = useApi<any[]>("/admin/roles");
   const perms = useApi<any[]>("/admin/permissions");
@@ -193,28 +222,45 @@ function Roles() {
     const codes = list.map((p) => p.code);
     setEdit({ ...edit, permissions: on ? Array.from(new Set([...edit.permissions, ...codes])) : edit.permissions.filter((c: string) => !codes.includes(c)) });
   };
+  const coverage = (codes: string[]) => Object.entries(areas)
+    .map(([area, list]) => ({ area, n: list.filter((p) => codes.includes(p.code)).length, of: list.length }))
+    .filter((x) => x.n > 0);
+  if (!roles.data || !perms.data) return <Spinner />;
   return (
     <>
-      <div className="mb-4 flex justify-end"><Button variant="primary" onClick={() => { setErr(""); setEdit({ name: "", description: "", permissions: [] }); }}><Plus size={16} /> Custom role</Button></div>
-      <Table head={["Role", "Description", "Access", ""]}>
-        {(roles.data || []).map((r) => (
-          <tr key={r.id}>
-            <td className="whitespace-nowrap">
-              <div className="flex items-center gap-2"><Briefcase size={16} className="text-muted" /><span className="font-semibold">{r.name}</span></div>
-              <div className="pl-6 text-sm text-muted">{r.is_system ? "Built-in role" : "Custom role"}</div>
-            </td>
-            <td className="text-muted">{r.description}</td>
-            <td className="w-40">
-              <div className="text-sm">{r.permissions.length} of {total} permissions</div>
-              <Progress value={total ? (100 * r.permissions.length) / total : 0} />
-            </td>
-            <td className="whitespace-nowrap text-right">
-              <Button variant="ghost" onClick={() => { setErr(""); setEdit(r); }}>Edit</Button>
-              {!r.is_system && <Button variant="ghost" onClick={() => confirm(`Delete the role "${r.name}"?`) && api.del(`/admin/roles/${r.id}`).then(roles.reload)}>Delete</Button>}
-            </td>
-          </tr>
+      <div className="mb-6 flex items-center justify-between gap-4">
+        <p className="text-sm text-muted">{roles.data.length} roles · {total} permissions available</p>
+        <Button variant="primary" onClick={() => { setErr(""); setEdit({ name: "", description: "", permissions: [] }); }}><Plus size={16} /> New role</Button>
+      </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {roles.data.map((r) => (
+          <article key={r.id} className="flex flex-col rounded border border-border bg-white">
+            <div className="flex items-start justify-between gap-4 p-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-h6">{r.name}</h3>
+                  <Chip muted>{r.is_system ? "Built-in" : "Custom"}</Chip>
+                </div>
+                <p className="mt-1 text-sm text-muted">{r.description || "No description"}</p>
+              </div>
+              <div className="flex shrink-0 gap-1">
+                <Button onClick={() => { setErr(""); setEdit(r); }}>Edit</Button>
+                {!r.is_system && <Button variant="ghost" onClick={() => confirm(`Delete the role "${r.name}"?`) && api.del(`/admin/roles/${r.id}`).then(roles.reload)}>Delete</Button>}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-1 px-4 pb-4">
+              {coverage(r.permissions).map((c) => (
+                <Chip key={c.area}>{c.area}{c.n < c.of && <span className="ml-1 text-muted">{c.n}/{c.of}</span>}</Chip>
+              ))}
+              {r.permissions.length === 0 && <span className="text-sm text-muted">No permissions</span>}
+            </div>
+            <footer className="mt-auto flex gap-6 border-t border-lightborder px-4 py-2 text-sm text-muted">
+              <span><b className="text-black">{r.permissions.length}</b> permissions</span>
+              <span><b className="text-black">{r.user_count ?? 0}</b> {r.user_count === 1 ? "user" : "users"}</span>
+            </footer>
+          </article>
         ))}
-      </Table>
+      </div>
       <Modal open={!!edit} title={edit?.id ? `Edit role: ${edit.name}` : "New role"} onClose={() => setEdit(null)} wide>
         {edit && <div className="flex flex-col gap-6">
           {err && <Alert tone="error">{err}</Alert>}
@@ -258,65 +304,171 @@ function Roles() {
   );
 }
 
-
 function AI() {
   const agents = useApi<any[]>("/admin/ai/agents");
   const models = useApi<any[]>("/admin/ai/models");
   const emb = useApi<any>("/admin/ai/embedding");
   const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
-  const [newModel, setNewModel] = useState({ model_id: "", label: "", input_per_mtok: "", output_per_mtok: "" });
-  const upd = async (key: string, patch: any) => {
-    try { await api.patch(`/admin/ai/agents/${key}`, patch); agents.reload(); setMsg({ tone: "success", text: "Agent updated" }); } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+  const [configure, setConfigure] = useState<any | null>(null);
+  const [modelEdit, setModelEdit] = useState<any | null>(null);
+  const [bulkModel, setBulkModel] = useState("");
+  if (!agents.data || !models.data || !emb.data) return <Spinner />;
+  const label = (id: string) => models.data!.find((m) => m.model_id === id)?.label || id;
+  const modelOpts = models.data.filter((m) => m.active).map((m) => ({ value: m.model_id, label: m.label }));
+  const active = emb.data.configurations.find((c: any) => c.is_active);
+  const byModule: Record<string, any[]> = {};
+  agents.data.forEach((a) => { (byModule[a.module] ||= []).push(a); });
+
+  const patch = async (key: string, body: any, ok = "Agent updated") => {
+    try { await api.patch(`/admin/ai/agents/${key}`, body); agents.reload(); setMsg({ tone: "success", text: ok }); }
+    catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
   };
-  const modelOpts = (models.data || []).filter((m) => m.active).map((m) => ({ value: m.model_id, label: m.label }));
-  const active = emb.data?.configurations.find((c: any) => c.is_active);
+  async function applyAll() {
+    if (!bulkModel || !confirm(`Use ${label(bulkModel)} for all ${agents.data!.length} agents?`)) return;
+    try {
+      for (const a of agents.data!) await api.patch(`/admin/ai/agents/${a.agent_key}`, { model_id: bulkModel });
+      agents.reload(); setMsg({ tone: "success", text: `All agents now use ${label(bulkModel)}.` });
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+  }
+  async function saveModel() {
+    try {
+      await api.put("/admin/ai/models", { ...modelEdit, input_per_mtok: Number(modelEdit.input_per_mtok || 0), output_per_mtok: Number(modelEdit.output_per_mtok || 0) });
+      setModelEdit(null); models.reload(); setMsg({ tone: "success", text: "Model saved." });
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
-      <Card title="Agents">
-        <Table head={["Agent", "Module", "Model", "Effort", "Max output tokens", "Timeout (s)", "Retries", "Enabled"]}>
-          {(agents.data || []).map((a) => (
-            <tr key={a.agent_key}><td className="font-semibold">{a.label}</td><td>{a.module}</td>
-              <td><Select value={a.model_id} onChange={(e) => upd(a.agent_key, { model_id: e.target.value })} options={modelOpts.some((m) => m.value === a.model_id) ? modelOpts : [{ value: a.model_id, label: a.model_id }, ...modelOpts]} /></td>
-              <td><Select value={a.effort} onChange={(e) => upd(a.agent_key, { effort: e.target.value })} options={["low", "medium", "high", "xhigh", "max"]} /></td>
-              <td><Input type="number" defaultValue={a.max_output_tokens} onBlur={(e) => Number(e.target.value) !== a.max_output_tokens && upd(a.agent_key, { max_output_tokens: Number(e.target.value) })} /></td>
-              <td><Input type="number" defaultValue={a.timeout_seconds} onBlur={(e) => Number(e.target.value) !== a.timeout_seconds && upd(a.agent_key, { timeout_seconds: Number(e.target.value) })} /></td>
-              <td><Input type="number" defaultValue={a.max_retries} onBlur={(e) => Number(e.target.value) !== a.max_retries && upd(a.agent_key, { max_retries: Number(e.target.value) })} /></td>
-              <td><input type="checkbox" checked={a.enabled} onChange={(e) => upd(a.agent_key, { enabled: e.target.checked })} aria-label="Enabled" /></td></tr>
+
+      <Card title="Agents" actions={
+        <div className="flex items-center gap-2">
+          <Select className="w-56" value={bulkModel} onChange={(e) => setBulkModel(e.target.value)} options={[{ value: "", label: "Set one model for all…" }, ...modelOpts]} />
+          <Button disabled={!bulkModel} onClick={applyAll}>Apply</Button>
+        </div>}>
+        <div className="flex flex-col gap-6">
+          {Object.entries(byModule).map(([mod, list]) => (
+            <div key={mod}>
+              <div className="mb-2 text-sm font-semibold uppercase text-mono-600">{MODULE_NAMES[mod] || mod}</div>
+              <ul className="rounded border border-border">
+                {list.map((a) => (
+                  <li key={a.agent_key} className="flex flex-col gap-3 border-b border-lightborder px-4 py-3 last:border-b-0 md:flex-row md:items-center md:justify-between">
+                    <div className="min-w-0">
+                      <div className={cx("font-semibold", !a.enabled && "text-muted")}>{a.label}</div>
+                      <div className="text-sm text-muted">{AGENT_INFO[a.agent_key] || ""}</div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <Chip>{label(a.model_id)}</Chip>
+                        <Chip>{cap(a.effort)} effort</Chip>
+                        <Chip muted>{ktok(a.max_output_tokens)} output tokens</Chip>
+                        <Chip muted>{a.timeout_seconds}s timeout</Chip>
+                        <Chip muted>{a.max_retries} {a.max_retries === 1 ? "retry" : "retries"}</Chip>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-4">
+                      <span className="flex items-center gap-2 text-sm text-muted">{a.enabled ? "On" : "Off"}
+                        <Toggle label={`${a.label} enabled`} checked={a.enabled} onChange={(v) => patch(a.agent_key, { enabled: v }, v ? `${a.label} enabled` : `${a.label} disabled`)} /></span>
+                      <Button onClick={() => setConfigure({ ...a })}>Configure</Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ))}
-        </Table>
-      </Card>
-      <Card title="Models and prices (per million tokens, used for cost estimates)">
-        <Table head={["Model", "Model ID", "Input", "Output", "Active"]}>
-          {(models.data || []).map((m) => (
-            <tr key={m.model_id}><td>{m.label}</td><td>{m.model_id}</td><td>{m.input_per_mtok}</td><td>{m.output_per_mtok}</td>
-              <td><input type="checkbox" checked={m.active} aria-label="Active" onChange={(e) => api.put("/admin/ai/models", { ...m, active: e.target.checked }).then(models.reload)} /></td></tr>
-          ))}
-        </Table>
-        <div className="mt-4 flex flex-wrap items-end gap-2">
-          <Field label="Model ID"><Input value={newModel.model_id} onChange={(e) => setNewModel({ ...newModel, model_id: e.target.value })} /></Field>
-          <Field label="Label"><Input value={newModel.label} onChange={(e) => setNewModel({ ...newModel, label: e.target.value })} /></Field>
-          <Field label="Input $/M"><Input type="number" step="any" value={newModel.input_per_mtok} onChange={(e) => setNewModel({ ...newModel, input_per_mtok: e.target.value })} /></Field>
-          <Field label="Output $/M"><Input type="number" step="any" value={newModel.output_per_mtok} onChange={(e) => setNewModel({ ...newModel, output_per_mtok: e.target.value })} /></Field>
-          <Button disabled={!newModel.model_id} onClick={() => api.put("/admin/ai/models", { ...newModel, input_per_mtok: Number(newModel.input_per_mtok || 0), output_per_mtok: Number(newModel.output_per_mtok || 0), active: true })
-            .then(() => { setNewModel({ model_id: "", label: "", input_per_mtok: "", output_per_mtok: "" }); models.reload(); })}>Add or update</Button>
         </div>
       </Card>
-      <Card title="Embeddings">
-        {emb.data && <>
-          <p className="text-sm">Active: <b>{active ? `${active.provider} · ${active.model_name} (${active.dimension} dimensions)` : "none"}</b></p>
-          {emb.data.reindex_job && <div className="mt-2 text-sm">Re-index job #{emb.data.reindex_job.id}: <StatusBadge status={emb.data.reindex_job.status} /> {emb.data.reindex_job.message}<Progress value={emb.data.reindex_job.progress} /></div>}
-          <Alert tone="warning">Vectors from different models are not compatible. Switching runs a full re-index as a background job; search keeps using the current index until it completes.</Alert>
-          <div className="mt-2 flex gap-2">
-            {Object.entries(emb.data.options).filter(([k]) => k !== active?.provider).map(([k, o]: any) => (
-              <Button key={k} onClick={() => confirm(`Switch to ${o.model_name} and re-index every document?`) &&
-                api.post("/admin/ai/embedding/switch", { provider: k, confirm: true }).then(emb.reload).catch((e) => setMsg({ tone: "error", text: e.message }))}>
-                Switch to {k} ({o.model_name})</Button>))}
-          </div>
-        </>}
+
+      <Card title="Models and prices" actions={<Button onClick={() => setModelEdit({ model_id: "", label: "", input_per_mtok: "", output_per_mtok: "", active: true, isNew: true })}><Plus size={16} /> Add model</Button>}>
+        <p className="-mt-1 mb-4 text-sm text-muted">Prices are per million tokens and are used only to estimate cost on the usage screen.</p>
+        <Table head={["Model", "Input price", "Output price", "Agents using it", "Available", ""]}>
+          {models.data.map((m) => (
+            <tr key={m.model_id}>
+              <td><div className="font-semibold">{m.label}</div><div className="text-sm text-muted">{m.model_id}</div></td>
+              <td>{money(Number(m.input_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
+              <td>{money(Number(m.output_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
+              <td>{agents.data!.filter((a) => a.model_id === m.model_id).length}</td>
+              <td><Toggle label={`${m.label} available`} checked={m.active} onChange={(v) => api.put("/admin/ai/models", { ...m, active: v }).then(models.reload)} /></td>
+              <td className="text-right"><Button variant="ghost" onClick={() => setModelEdit({ ...m })}>Edit</Button></td>
+            </tr>
+          ))}
+        </Table>
       </Card>
+
+      <Card title="Embedding model">
+        <p className="-mt-1 mb-4 text-sm text-muted">Turns Knowledge Hub documents into vectors for search. Vectors from different models are not compatible, so switching runs a full re-index in the background; search keeps using the current index until it finishes.</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {Object.entries(emb.data.options).map(([k, o]: any) => {
+            const isActive = active?.provider === k;
+            return (
+              <div key={k} className={cx("rounded border p-4", isActive ? "border-black" : "border-border")}>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-semibold">{k === "local" ? "Local model (on this server)" : "External service (Voyage AI)"}</div>
+                  {isActive ? <Badge tone="success">Active</Badge> : null}
+                </div>
+                <div className="mt-1 text-sm text-muted">{o.model_name} · {o.dimension} dimensions</div>
+                <div className="mt-1 text-sm text-muted">{k === "local" ? "Document text never leaves the server. No extra account needed." : "Needs a Voyage AI key in API keys. Document text is sent to Voyage AI."}</div>
+                {!isActive && <div className="mt-4"><Button onClick={() => confirm(`Switch to ${o.model_name} and re-index every document?`) &&
+                  api.post("/admin/ai/embedding/switch", { provider: k, confirm: true }).then(emb.reload).catch((e) => setMsg({ tone: "error", text: e.message }))}>Switch and re-index</Button></div>}
+              </div>
+            );
+          })}
+        </div>
+        {emb.data.reindex_job && ["Queued", "Processing"].includes(emb.data.reindex_job.status) && (
+          <div className="mt-4 text-sm">Re-index in progress: {emb.data.reindex_job.message}<Progress value={emb.data.reindex_job.progress} /></div>
+        )}
+      </Card>
+
+      <Modal open={!!configure} title={configure ? `Configure: ${configure.label}` : ""} onClose={() => setConfigure(null)}>
+        {configure && <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted">{AGENT_INFO[configure.agent_key]}</p>
+          <SettingRow title="Model" help="The Claude model this agent calls.">
+            <Select className="w-56" value={configure.model_id} onChange={(e) => setConfigure({ ...configure, model_id: e.target.value })}
+              options={modelOpts.some((m) => m.value === configure.model_id) ? modelOpts : [{ value: configure.model_id, label: configure.model_id }, ...modelOpts]} />
+          </SettingRow>
+          <SettingRow title="Effort" help={EFFORT_INFO[configure.effort]}>
+            <Select className="w-40" value={configure.effort} onChange={(e) => setConfigure({ ...configure, effort: e.target.value })}
+              options={Object.keys(EFFORT_INFO).map((k) => ({ value: k, label: cap(k) }))} />
+          </SettingRow>
+          <SettingRow title="Maximum output" help="Longest answer the agent may write. Raise it if long outputs are cut off.">
+            <NumberInput value={configure.max_output_tokens} unit="tokens" min={256} max={128000} step={1000} onChange={(v) => setConfigure({ ...configure, max_output_tokens: v })} />
+          </SettingRow>
+          <SettingRow title="Time limit" help="A call that takes longer is stopped and retried.">
+            <NumberInput value={configure.timeout_seconds} unit="seconds" min={10} max={3600} onChange={(v) => setConfigure({ ...configure, timeout_seconds: v })} />
+          </SettingRow>
+          <SettingRow title="Retries" help="Retries after a temporary error such as a rate limit.">
+            <NumberInput value={configure.max_retries} unit="retries" min={0} max={5} onChange={(v) => setConfigure({ ...configure, max_retries: v })} />
+          </SettingRow>
+          <div className="flex justify-end gap-2 border-t border-lightborder pt-4">
+            <Button variant="ghost" onClick={() => setConfigure(null)}>Cancel</Button>
+            <Button variant="primary" onClick={async () => {
+              const { model_id, effort, max_output_tokens, timeout_seconds, max_retries } = configure;
+              await patch(configure.agent_key, { model_id, effort, max_output_tokens, timeout_seconds, max_retries }, `${configure.label} saved`);
+              setConfigure(null);
+            }}>Save</Button>
+          </div>
+        </div>}
+      </Modal>
+
+      <Modal open={!!modelEdit} title={modelEdit?.isNew ? "Add model" : `Edit ${modelEdit?.label}`} onClose={() => setModelEdit(null)}>
+        {modelEdit && <div className="flex flex-col gap-4">
+          <Field label="Model ID" hint="Exactly as the provider names it, e.g. claude-sonnet-5-5"><Input value={modelEdit.model_id} disabled={!modelEdit.isNew} onChange={(e) => setModelEdit({ ...modelEdit, model_id: e.target.value })} /></Field>
+          <Field label="Display name"><Input value={modelEdit.label} onChange={(e) => setModelEdit({ ...modelEdit, label: e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Input price (USD per 1M tokens)"><Input type="number" step="any" value={modelEdit.input_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, input_per_mtok: e.target.value })} /></Field>
+            <Field label="Output price (USD per 1M tokens)"><Input type="number" step="any" value={modelEdit.output_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, output_per_mtok: e.target.value })} /></Field>
+          </div>
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setModelEdit(null)}>Cancel</Button>
+            <Button variant="primary" disabled={!modelEdit.model_id || !modelEdit.label} onClick={saveModel}>Save model</Button></div>
+        </div>}
+      </Modal>
     </div>
   );
+}
+
+function keyStatus(k: any): { tone: "success" | "warning" | "error" | "neutral" | "info"; text: string } {
+  if (k.source === "none") return { tone: "neutral", text: "Not configured" };
+  if (k.last_test_ok === false) return { tone: "error", text: "Test failed" };
+  if (k.last_test_ok === true) return { tone: "success", text: "Connected" };
+  return k.testable ? { tone: "warning", text: "Not tested" } : { tone: "info", text: "Saved" };
 }
 
 function ApiKeys() {
@@ -330,7 +482,7 @@ function ApiKeys() {
   async function save() {
     try {
       await api.put(`/admin/api-keys/${edit.provider}`, { value, label });
-      setMsg({ tone: "success", text: `${edit.label || edit.provider} key saved (encrypted).` });
+      setMsg({ tone: "success", text: `${label || edit.label || edit.provider} key saved and encrypted.` });
       setEdit(null); setValue(""); setLabel(""); reload();
     } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
   }
@@ -342,37 +494,80 @@ function ApiKeys() {
       reload();
     } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setBusy(""); }
   }
+  const open = (k: any) => { setEdit(k); setValue(""); setLabel(k.custom ? k.label : ""); };
+  if (!data) return <Spinner />;
+  const primary = data.filter((k) => k.testable);
+  const others = data.filter((k) => !k.testable);
+
+  const actions = (k: any) => (
+    <div className="flex flex-wrap gap-2">
+      <Button variant={k.masked ? "secondary" : "primary"} onClick={() => open(k)}>{k.masked ? "Replace key" : "Add key"}</Button>
+      {k.testable && k.source !== "none" && <Button loading={busy === k.provider} onClick={() => test(k.provider)}>Test connection</Button>}
+      {k.masked && <Button variant="ghost" onClick={() => confirm(`Remove the stored ${k.label} key?`) && api.del(`/admin/api-keys/${k.provider}`).then(reload)}>Remove</Button>}
+    </div>
+  );
+
   return (
-    <div className="flex flex-col gap-4">
-      <Alert tone="info">
-        Keys are encrypted before they are stored in the database and are never shown again after saving; only the last four
-        characters are displayed. A key saved here takes precedence over the server&apos;s environment file and applies immediately.
-      </Alert>
+    <div className="flex flex-col gap-8">
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
-      <div className="flex justify-end"><Button onClick={() => { setEdit({ provider: "", label: "", custom: true, isNew: true }); setValue(""); setLabel(""); }}><Plus size={16} /> Other provider</Button></div>
-      <Table head={["Provider", "Used for", "Key", "Source", "Last test", ""]}>
-        {(data || []).map((k) => (
-          <tr key={k.provider}>
-            <td className="font-semibold">{k.label}<div className="text-sm font-normal text-muted">{k.provider}</div></td>
-            <td>{k.used_for}</td>
-            <td>{k.masked || <span className="text-muted">Not set</span>}</td>
-            <td>{k.source === "database" ? <Badge tone="success">Stored encrypted</Badge> : k.source === "environment" ? <Badge tone="info">Environment file</Badge> : <Badge>None</Badge>}</td>
-            <td>{k.last_tested_at ? <>{k.last_test_ok ? <Badge tone="success">Passed</Badge> : <Badge tone="error">Failed</Badge>}<div className="text-sm text-muted">{fmtDate(k.last_tested_at, true)}</div></> : ""}</td>
-            <td className="whitespace-nowrap">
-              <Button variant="ghost" onClick={() => { setEdit(k); setValue(""); setLabel(k.custom ? k.label : ""); }}>{k.masked ? "Replace" : "Add key"}</Button>
-              {k.testable && k.source !== "none" && <Button variant="ghost" loading={busy === k.provider} onClick={() => test(k.provider)}>Test</Button>}
-              {k.masked && <Button variant="ghost" onClick={() => confirm(`Delete the stored ${k.label} key?`) && api.del(`/admin/api-keys/${k.provider}`).then(reload)}>Delete</Button>}
-            </td>
-          </tr>
-        ))}
-      </Table>
-      <Modal open={!!edit} title={edit?.isNew ? "Add API key for another provider" : `${edit?.masked ? "Replace" : "Add"} ${edit?.label} key`} onClose={() => setEdit(null)}>
+      <section>
+        <h3 className="mb-1 text-h6">Used by the platform</h3>
+        <p className="mb-4 text-sm text-muted">Keys are encrypted before they are saved and are never shown again; only the last four characters are displayed. A key saved here replaces the one in the server&apos;s configuration file and applies immediately.</p>
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {primary.map((k) => {
+            const s = keyStatus(k);
+            return (
+              <article key={k.provider} className="flex flex-col gap-4 rounded border border-border p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-offwhite"><KeyRound size={24} /></span>
+                    <div><h4 className="text-h6">{k.label}</h4><p className="text-sm text-muted">{k.used_for}</p></div>
+                  </div>
+                  <Badge tone={s.tone}>{s.text}</Badge>
+                </div>
+                <dl className="grid grid-cols-2 gap-4 rounded bg-offwhite p-3 text-sm">
+                  <div><dt className="text-muted">Key</dt><dd className="font-semibold">{k.masked ? `••••••••${k.masked.replace("…", "")}` : "—"}</dd></div>
+                  <div><dt className="text-muted">Stored in</dt><dd className="font-semibold">{k.source === "database" ? "Database (encrypted)" : k.source === "environment" ? "Server configuration file" : "—"}</dd></div>
+                  <div><dt className="text-muted">Last tested</dt><dd className="font-semibold">{k.last_tested_at ? fmtDate(k.last_tested_at, true) : "Never"}</dd></div>
+                  <div><dt className="text-muted">Updated</dt><dd className="font-semibold">{k.updated_at ? fmtDate(k.updated_at, true) : "—"}</dd></div>
+                </dl>
+                {k.last_test_ok === false && k.last_test_message && <p className="text-sm text-error">{k.last_test_message}</p>}
+                {actions(k)}
+              </article>
+            );
+          })}
+        </div>
+      </section>
+      <section>
+        <div className="mb-4 flex items-end justify-between gap-4">
+          <div><h3 className="mb-1 text-h6">Other providers</h3><p className="text-sm text-muted">Stored for future use. No feature uses these keys yet.</p></div>
+          <Button onClick={() => { setEdit({ provider: "", label: "", custom: true, isNew: true }); setValue(""); setLabel(""); }}><Plus size={16} /> Add provider</Button>
+        </div>
+        <ul className="rounded border border-border">
+          {others.map((k) => {
+            const s = keyStatus(k);
+            return (
+              <li key={k.provider} className="flex flex-col gap-3 border-b border-lightborder px-4 py-3 last:border-b-0 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <KeyRound size={20} className="text-muted" />
+                  <div><div className="font-semibold">{k.label}</div><div className="text-sm text-muted">{k.masked ? `Key ending ${k.masked.replace("…", "")}` : "No key saved"}</div></div>
+                </div>
+                <div className="flex items-center gap-4"><Badge tone={s.tone}>{s.text}</Badge>{actions(k)}</div>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+      <Modal open={!!edit} title={edit?.isNew ? "Add a provider key" : `${edit?.masked ? "Replace" : "Add"} ${edit?.label} key`} onClose={() => setEdit(null)}>
         {edit && <div className="flex flex-col gap-4">
-          {edit.isNew && <Field label="Provider ID" hint="Lower-case letters, digits and underscores, e.g. mistral">
+          {edit.isNew && <Field label="Provider ID" hint="Lower-case letters, digits and underscores, for example mistral">
             <Input value={edit.provider} onChange={(e) => setEdit({ ...edit, provider: e.target.value.toLowerCase() })} /></Field>}
           {edit.custom && <Field label="Display name"><Input value={label} onChange={(e) => setLabel(e.target.value)} /></Field>}
-          <Field label="API key"><Input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} placeholder="Paste the key" /></Field>
-          <div><Button variant="primary" disabled={!value.trim() || !edit.provider} onClick={save}>Save encrypted</Button></div>
+          <Field label="API key" hint={edit.masked ? "The current key is replaced when you save." : "Paste the key exactly as the provider shows it."}>
+            <Input type="password" autoComplete="off" value={value} onChange={(e) => setValue(e.target.value)} placeholder="Paste the key" />
+          </Field>
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
+            <Button variant="primary" disabled={!value.trim() || !edit.provider} onClick={save}>Save encrypted</Button></div>
         </div>}
       </Modal>
     </div>

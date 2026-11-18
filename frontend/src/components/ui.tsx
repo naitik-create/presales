@@ -117,8 +117,8 @@ export function Table({ head, children, empty }: { head: ReactNode[]; children: 
     <div className="overflow-x-auto rounded border border-border">
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="bg-black text-left text-white">
-            {head.map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-2 font-semibold">{h}</th>)}
+          <tr className="border-b border-border bg-offwhite text-left text-mono-700">
+            {head.map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-3 font-semibold">{h}</th>)}
           </tr>
         </thead>
         <tbody className="[&>tr]:border-t [&>tr]:border-lightborder [&>tr:hover]:bg-offwhite [&_td]:px-3 [&_td]:py-2 [&_td]:align-top">

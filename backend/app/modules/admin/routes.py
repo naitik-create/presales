@@ -18,7 +18,7 @@ from app.core.security import check_policy, hash_password
 from app.core.settings_store import get_setting, set_setting
 from app.db import get_db
 from app.models.ai import AgentConfiguration, AIModel, AIUsageLog, Budget, EmbeddingConfiguration, ModelPrice
-from app.models.core import ApiCredential, AuditLog, Job, Permission, Role, User, UserSession
+from app.models.core import ApiCredential, AuditLog, Job, Permission, Role, User, UserSession, user_roles
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -121,8 +121,11 @@ def list_permissions(cu: CurrentUser = Depends(require("admin.roles", "admin.use
 
 @router.get("/roles")
 def list_roles(cu: CurrentUser = Depends(require("admin.roles", "admin.users")), db: Session = Depends(get_db)):
+    counts = dict(db.execute(select(user_roles.c.role_id, func.count()).join(User, User.id == user_roles.c.user_id)
+                             .where(User.is_active.is_(True)).group_by(user_roles.c.role_id)).all())
     return [{"id": r.id, "name": r.name, "description": r.description, "is_system": r.is_system,
-             "permissions": sorted(p.code for p in r.permissions)} for r in db.scalars(select(Role).order_by(Role.name))]
+             "permissions": sorted(p.code for p in r.permissions), "user_count": counts.get(r.id, 0)}
+            for r in db.scalars(select(Role).order_by(Role.name))]
 
 
 def _apply_role(db: Session, role: Role, body: RoleIn) -> None:
