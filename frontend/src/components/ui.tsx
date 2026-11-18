@@ -7,18 +7,32 @@ export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
 }
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+/**
+ * Buttons share one recognisable shape (a pill) so they never look like fields, which are square-cornered.
+ * primary   – the one main action on a screen: Motadata accent fill, black text (5.86:1), turns black on hover
+ * secondary – other actions: black outline, fills black on hover
+ * ghost     – low-emphasis actions in lists and toolbars: text only, grey pill on hover
+ * danger    – destructive actions: error-colour outline (never the accent)
+ */
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
+const BUTTON_BASE = "inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap rounded-full border px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40";
+const BUTTON_STYLES: Record<ButtonVariant, string> = {
+  primary: "border-accent bg-accent text-black hover:border-black hover:bg-black hover:text-white disabled:hover:border-accent disabled:hover:bg-accent disabled:hover:text-black",
+  secondary: "border-black bg-white text-black hover:bg-black hover:text-white disabled:hover:bg-white disabled:hover:text-black",
+  ghost: "border-transparent bg-transparent px-3 text-black hover:bg-mono-100 disabled:hover:bg-transparent",
+  danger: "border-error bg-white text-error hover:bg-error hover:text-white disabled:hover:bg-white disabled:hover:text-error",
+};
+
+/** Button styling for links and file-picker labels that act as buttons. */
+export function buttonClass(variant: ButtonVariant = "secondary", extra?: string) {
+  return cx(BUTTON_BASE, BUTTON_STYLES[variant], "cursor-pointer", extra);
+}
+
 export function Button({ variant = "secondary", loading, className, children, ...p }:
-  ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; loading?: boolean }) {
-  const styles: Record<Variant, string> = {
-    primary: "bg-accent text-black border border-accent hover:brightness-95",
-    secondary: "bg-white text-black border border-border hover:border-mono-400",
-    ghost: "bg-transparent text-mono-700 hover:bg-offwhite hover:text-black border border-transparent",
-    danger: "bg-white text-error border border-error hover:bg-offwhite",
-  };
+  ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant; loading?: boolean }) {
   return (
     <button {...p} disabled={p.disabled || loading}
-      className={cx("inline-flex h-8 items-center gap-2 whitespace-nowrap rounded px-3 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed", styles[variant], className)}>
+      className={cx(BUTTON_BASE, BUTTON_STYLES[variant], className)}>
       {loading && <Loader2 size={16} className="animate-spin" />}
       {children}
     </button>

@@ -13,6 +13,10 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Connection test for OpenAI and Gemini keys.
 
 ### Changed
+- Buttons have one distinctive brand style across the application: pill shape (fields stay square-cornered).
+  Primary = Motadata accent fill with black text, turning black on hover; secondary = black outline that fills black
+  on hover; ghost = text with a grey pill on hover; danger = error-colour outline. Links and upload labels that act
+  as buttons use the same styles.
 - Minimalist pass across the application: 14px interface text, 32px buttons and fields, slimmer main menu and top
   bar, smaller icons, softer section menu, one heading per admin page, crisper 6px corners, smaller switches.
 - Roles and permissions simplified: plain role list, compact permission rows (All / x of y / None), descriptions only

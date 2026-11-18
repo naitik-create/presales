@@ -2,7 +2,7 @@
 import { Download, Link2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { Alert, Badge, Button, Card, Field, Input, Modal, NumberInput, PageHeader, Select, SettingRow, Spinner, StatusBadge, Table, Tabs, Textarea, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, buttonClass, Card, Field, Input, Modal, NumberInput, PageHeader, Select, SettingRow, Spinner, StatusBadge, Table, Tabs, Textarea, Toggle } from "@/components/ui";
 import { api, download, fmtDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
@@ -165,7 +165,7 @@ function SourceModal({ id, onClose, onChanged }: { id: number; onClose: () => vo
           {d.kind === "file" && <Button onClick={() => download(`/knowledge/sources/${id}/download`)}><Download size={16} /> Original</Button>}
           {d.kind === "url" && can("knowledge.register_url") && <Button onClick={() => act("resync")}><RefreshCw size={16} /> Re-sync</Button>}
           {d.kind === "file" && can("knowledge.upload") && (
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-border px-4 py-2 text-sm font-semibold hover:bg-offwhite">
+            <label className={buttonClass("secondary")}>
               <Upload size={16} /> New version
               <input type="file" className="hidden" onChange={async (e) => {
                 const f = e.target.files?.[0]; if (!f) return;

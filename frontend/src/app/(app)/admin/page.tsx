@@ -3,7 +3,7 @@ import { Activity, Bot, Briefcase, ChevronRight, ClipboardList, Image as ImageIc
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, Card, Checkbox, cx, Drawer, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Segmented, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, buttonClass, Card, Checkbox, cx, Drawer, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Segmented, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
 import { api, fmtDate, money } from "@/lib/api";
 import { refreshBranding, useBranding } from "@/lib/branding";
 import { useApi } from "@/lib/hooks";
@@ -493,7 +493,7 @@ function AI() {
               <div className="text-sm text-muted">{n} {n === 1 ? "agent uses" : "agents use"} this provider, but no API key is saved. These agents will fail until a key is added.</div>
             </div>
           </div>
-          <Link href="/admin?tab=keys" className="inline-flex items-center gap-1 rounded border border-border px-4 py-2 text-sm font-semibold hover:bg-offwhite">Add API key <ChevronRight size={16} /></Link>
+          <Link href="/admin?tab=keys" className={buttonClass("primary")}>Add API key <ChevronRight size={16} /></Link>
         </div>
       ))}
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
@@ -811,7 +811,7 @@ function BrandingTab() {
                 : <span className="text-sm text-muted">Not uploaded</span>}
             </div>
             <div className="flex items-center gap-2">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-border px-4 py-2 text-sm font-semibold hover:bg-offwhite">
+              <label className={buttonClass("secondary")}>
                 Upload
                 <input type="file" className="hidden" accept={k === "export" ? ".png,.jpg,.jpeg" : ".svg,.png,.jpg,.jpeg"}
                   onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(k, f); e.target.value = ""; }} />
