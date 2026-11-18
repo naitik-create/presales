@@ -11,14 +11,14 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 export function Button({ variant = "secondary", loading, className, children, ...p }:
   ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; loading?: boolean }) {
   const styles: Record<Variant, string> = {
-    primary: "bg-accent text-black hover:bg-mono-900 hover:text-white border border-accent hover:border-mono-900",
-    secondary: "bg-white text-black border border-border hover:bg-offwhite",
-    ghost: "bg-transparent text-black hover:bg-offwhite border border-transparent",
+    primary: "bg-accent text-black border border-accent hover:brightness-95",
+    secondary: "bg-white text-black border border-border hover:border-mono-400",
+    ghost: "bg-transparent text-mono-700 hover:bg-offwhite hover:text-black border border-transparent",
     danger: "bg-white text-error border border-error hover:bg-offwhite",
   };
   return (
     <button {...p} disabled={p.disabled || loading}
-      className={cx("inline-flex items-center gap-2 rounded px-4 py-2 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed", styles[variant], className)}>
+      className={cx("inline-flex h-8 items-center gap-2 whitespace-nowrap rounded px-3 text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed", styles[variant], className)}>
       {loading && <Loader2 size={16} className="animate-spin" />}
       {children}
     </button>
@@ -28,14 +28,14 @@ export function Button({ variant = "secondary", loading, className, children, ..
 export function Field({ label, hint, children, className }: { label: string; hint?: string; children: ReactNode; className?: string }) {
   return (
     <label className={cx("flex flex-col gap-1", className)}>
-      <span className="text-sm font-semibold">{label}</span>
+      <span className="text-sm text-mono-700">{label}</span>
       {children}
       {hint && <span className="text-sm text-muted">{hint}</span>}
     </label>
   );
 }
 
-const inputCls = "w-full rounded border border-border bg-white px-3 py-2 text-sm placeholder:text-mono-500 focus:border-black focus:outline-none";
+const inputCls = "w-full rounded border border-border bg-white px-3 py-1 text-sm placeholder:text-mono-500 focus:border-black focus:outline-none";
 export function Input(p: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...p} className={cx(inputCls, p.className)} />;
 }
@@ -56,8 +56,8 @@ export function Card({ title, actions, children, className }: { title?: ReactNod
   return (
     <section className={cx("rounded border border-border bg-white", className)}>
       {(title || actions) && (
-        <header className="flex items-center justify-between gap-4 border-b border-lightborder px-4 py-3">
-          <h2 className="text-h6">{title}</h2>
+        <header className="flex items-center justify-between gap-4 border-b border-lightborder px-4 py-2">
+          <h2 className="text-sm font-semibold">{title}</h2>
           <div className="flex items-center gap-2">{actions}</div>
         </header>
       )}
@@ -68,9 +68,9 @@ export function Card({ title, actions, children, className }: { title?: ReactNod
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
       <div>
-        <h1 className="text-h3">{title}</h1>
+        <h1 className="text-h4">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
       </div>
       <div className="flex flex-wrap items-center gap-2">{actions}</div>
@@ -118,7 +118,7 @@ export function Table({ head, children, empty }: { head: ReactNode[]; children: 
       <table className="w-full border-collapse text-sm">
         <thead>
           <tr className="border-b border-border bg-offwhite text-left text-mono-700">
-            {head.map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-3 font-semibold">{h}</th>)}
+            {head.map((h, i) => <th key={i} className="whitespace-nowrap px-3 py-2 text-sm font-semibold text-mono-600">{h}</th>)}
           </tr>
         </thead>
         <tbody className="[&>tr]:border-t [&>tr]:border-lightborder [&>tr:hover]:bg-offwhite [&_td]:px-3 [&_td]:py-2 [&_td]:align-top">
@@ -157,7 +157,7 @@ export function Modal({ open, title, onClose, children, wide }: { open: boolean;
       <div role="dialog" aria-modal className={cx("mt-12 w-full rounded border border-border bg-white", wide ? "max-w-content" : "max-w-prose")}
         onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center justify-between border-b border-lightborder px-4 py-3">
-          <h2 className="text-h5">{title}</h2>
+          <h2 className="text-h6">{title}</h2>
           <button aria-label="Close" onClick={onClose} className="rounded p-1 hover:bg-offwhite"><X size={20} /></button>
         </header>
         <div className="p-4">{children}</div>
@@ -190,11 +190,11 @@ export function Progress({ value }: { value: number }) {
 /** Compact segmented control for sub-pages within a section. */
 export function Segmented({ items, active, onChange }: { items: { key: string; label: string; count?: number }[]; active: string; onChange: (k: string) => void }) {
   return (
-    <div role="tablist" className="inline-flex rounded border border-border bg-offwhite p-1">
+    <div role="tablist" className="inline-flex rounded bg-mono-100 p-1">
       {items.map((i) => (
         <button key={i.key} role="tab" aria-selected={active === i.key} onClick={() => onChange(i.key)}
-          className={cx("rounded-sm px-4 py-1 text-sm font-semibold transition-colors",
-            active === i.key ? "bg-white text-black shadow-sm" : "text-mono-600 hover:text-black")}>
+          className={cx("rounded-sm px-3 py-1 text-sm transition-colors",
+            active === i.key ? "bg-white font-semibold text-black shadow-sm" : "text-mono-600 hover:text-black")}>
           {i.label}{i.count !== undefined && <span className="ml-2 text-muted">{i.count}</span>}
         </button>
       ))}
@@ -214,7 +214,7 @@ export function Drawer({ open, title, subtitle, onClose, children, footer }: { o
     <div className="modal-overlay fixed inset-0 z-50 flex justify-end" onClick={onClose}>
       <aside role="dialog" aria-modal aria-label={title} className="flex h-full w-full max-w-lg flex-col border-l border-border bg-white" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-start justify-between gap-4 border-b border-lightborder px-6 py-4">
-          <div><h2 className="text-h5">{title}</h2>{subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}</div>
+          <div><h2 className="text-h6">{title}</h2>{subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}</div>
           <button aria-label="Close" onClick={onClose} className="rounded p-1 hover:bg-offwhite"><X size={20} /></button>
         </header>
         <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
@@ -238,9 +238,9 @@ export function Checkbox({ checked, indeterminate, onChange, label, disabled }: 
 export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (
     <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}
-      className={cx("relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50",
-        checked ? "border-black bg-black" : "border-mono-300 bg-mono-200")}>
-      <span className={cx("inline-block h-5 w-5 rounded-full bg-white transition-transform", checked ? "translate-x-6" : "translate-x-px")} />
+      className={cx("relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
+        checked ? "bg-black" : "bg-mono-300")}>
+      <span className={cx("inline-block h-4 w-4 rounded-full bg-white transition-transform", checked ? "translate-x-4" : "translate-x-px")} />
     </button>
   );
 }
@@ -248,9 +248,9 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
 /** A labelled settings row: title and help text on the left, the control on the right. */
 export function SettingRow({ title, help, children }: { title: string; help?: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-2 border-b border-lightborder py-4 last:border-b-0 md:flex-row md:items-center md:justify-between md:gap-8">
+    <div className="flex flex-col gap-2 border-b border-lightborder py-3 last:border-b-0 md:flex-row md:items-center md:justify-between md:gap-8">
       <div className="min-w-0 md:max-w-prose">
-        <div className="text-sm font-semibold">{title}</div>
+        <div className="text-sm">{title}</div>
         {help && <div className="text-sm text-muted">{help}</div>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -263,8 +263,8 @@ export function NumberInput({ value, onChange, unit, min, max, step }: { value: 
     <div className="flex items-center overflow-hidden rounded border border-border focus-within:border-black">
       <input type="number" value={value} min={min} max={max} step={step ?? 1}
         onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
-        className="w-24 bg-white px-3 py-2 text-right text-sm focus:outline-none" />
-      {unit && <span className="border-l border-border bg-offwhite px-3 py-2 text-sm text-muted">{unit}</span>}
+        className="w-20 bg-white px-2 py-1 text-right text-sm focus:outline-none" />
+      {unit && <span className="border-l border-border bg-offwhite px-2 py-1 text-sm text-muted">{unit}</span>}
     </div>
   );
 }

@@ -12,9 +12,9 @@ import { useSession } from "@/lib/session";
 import { cx, Spinner } from "./ui";
 
 const ICONS: Record<string, ReactNode> = {
-  dashboard: <LayoutDashboard size={24} />, rfp: <FileSearch size={24} />,
-  demo: <MonitorPlay size={24} />, ask: <MessageSquare size={24} />, scorecard: <Trophy size={24} />,
-  knowledge: <BookOpen size={24} />, admin: <Settings size={24} />,
+  dashboard: <LayoutDashboard size={18} />, rfp: <FileSearch size={18} />,
+  demo: <MonitorPlay size={18} />, ask: <MessageSquare size={18} />, scorecard: <Trophy size={18} />,
+  knowledge: <BookOpen size={18} />, admin: <Settings size={18} />,
 };
 
 export default function AppShell({ children }: { children: ReactNode }) {
@@ -44,32 +44,32 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen">
       <aside className={cx("sticky top-0 flex h-screen flex-col border-r border-border bg-white", collapsed ? "w-sidebar-collapsed" : "w-sidebar")}>
-        <div className={cx("flex items-center border-b border-lightborder", collapsed ? "justify-center p-4" : "px-6 py-4")}>
+        <div className={cx("flex items-center border-b border-lightborder", collapsed ? "justify-center px-2 py-3" : "px-4 py-3")}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {collapsed ? <img src={brand.logomark} alt="Motadata" width={32} height={32} className="h-8 w-8 object-contain" />
             : <img src={brand.logo} alt="Motadata" className="h-8 w-auto min-w-[120px] max-w-full object-contain" />}
         </div>
-        <nav className="flex-1 overflow-y-auto py-2">
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
           {me.nav.map((n) => {
             const active = n.href === "/" ? path === "/" : path.startsWith(n.href);
             return (
               <Link key={n.key} href={n.href} title={n.label}
-                className={cx("flex items-center gap-3 border-l-4 py-2 text-sm font-semibold", collapsed ? "justify-center px-3" : "px-5",
-                  active ? "border-accent bg-offwhite text-black" : "border-transparent text-mono-700 hover:bg-offwhite hover:text-black")}>
+                className={cx("mb-px flex items-center gap-3 rounded py-2 text-sm", collapsed ? "justify-center px-2" : "px-3",
+                  active ? "bg-mono-100 font-semibold text-black" : "text-mono-600 hover:bg-offwhite hover:text-black")}>
                 {ICONS[n.key]}
                 {!collapsed && <span>{n.label}</span>}
               </Link>
             );
           })}
         </nav>
-        <button onClick={toggle} className="flex items-center gap-2 border-t border-lightborder px-5 py-3 text-sm text-muted hover:text-black"
+        <button onClick={toggle} className="flex items-center gap-2 border-t border-lightborder px-4 py-3 text-sm text-muted hover:text-black"
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
-          {collapsed ? <PanelLeftOpen size={20} /> : <><PanelLeftClose size={20} /> Collapse</>}
+          {collapsed ? <PanelLeftOpen size={18} /> : <><PanelLeftClose size={18} /> Collapse</>}
         </button>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
-        <main className="mx-auto w-full max-w-content flex-1 px-8 py-6">{children}</main>
+        <main className="mx-auto w-full max-w-content flex-1 px-8 py-6 text-sm">{children}</main>
       </div>
     </div>
   );
@@ -98,11 +98,11 @@ function TopBar() {
   const unread = notes.filter((n) => !n.read).length;
 
   return (
-    <header className="sticky top-0 z-40 flex items-center gap-4 border-b border-border bg-white px-8 py-3">
+    <header className="sticky top-0 z-40 flex items-center gap-4 border-b border-border bg-white px-8 py-2">
       <div className="relative max-w-prose flex-1">
-        <Search size={16} className="absolute left-3 top-3 text-muted" />
+        <Search size={16} className="absolute left-3 top-2 text-muted" />
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search RFPs, demo scripts and knowledge"
-          className="w-full rounded border border-border py-2 pl-8 pr-3 text-sm focus:border-black focus:outline-none" />
+          className="w-full rounded border border-lightborder bg-offwhite py-1 pl-8 pr-3 text-sm focus:border-black focus:bg-white focus:outline-none" />
         {results && (
           <div className="absolute left-0 right-0 top-12 max-h-96 overflow-y-auto rounded border border-border bg-white">
             {results.length === 0 && <div className="p-3 text-sm text-muted">No results</div>}
@@ -119,7 +119,7 @@ function TopBar() {
       <div className="relative ml-auto">
         <button aria-label="Notifications" className="relative rounded p-2 hover:bg-offwhite"
           onClick={() => { setShowNotes((s) => !s); if (unread) api.post("/auth/notifications/read").then(() => setNotes((n) => n.map((x) => ({ ...x, read: true })))); }}>
-          <Bell size={20} />
+          <Bell size={18} />
           {unread > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-accent" aria-label={`${unread} unread`} />}
         </button>
         {showNotes && (
@@ -137,7 +137,7 @@ function TopBar() {
       </div>
       <div className="relative">
         <button onClick={() => setShowUser((s) => !s)} className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-offwhite">
-          <User size={20} /> {me?.full_name}
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-mono-100 text-sm font-semibold text-mono-700">{(me?.full_name || "?").slice(0, 1).toUpperCase()}</span> {me?.full_name}
         </button>
         {showUser && (
           <div className="absolute right-0 top-12 w-56 rounded border border-border bg-white py-1">

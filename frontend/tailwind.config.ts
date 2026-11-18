@@ -46,9 +46,9 @@ const config: Config = {
       sm: ["14px", { lineHeight: "1.5" }],
     },
     fontWeight: { normal: "400", semibold: "600" },
-    borderRadius: { none: "0", sm: "4px", DEFAULT: "8px", lg: "12px", full: "9999px" },
+    borderRadius: { none: "0", sm: "4px", DEFAULT: "6px", lg: "8px", full: "9999px" },
     extend: {
-      width: { sidebar: "256px", "sidebar-collapsed": "64px", 12: "48px", 24: "96px", 32: "128px", 40: "160px", 56: "224px", 96: "384px" },
+      width: { sidebar: "232px", "sidebar-collapsed": "56px", 9: "36px", 12: "48px", 20: "80px", 24: "96px", 32: "128px", 40: "160px", 48: "192px", 56: "224px", 96: "384px" },
       maxWidth: { sm: "384px", lg: "512px", content: "1440px", prose: "768px" },
       boxShadow: { sm: "0 1px 2px rgb(0 0 0 / 0.08)" },
     },

@@ -12,21 +12,21 @@ import { useSession } from "@/lib/session";
 type Section = { key: string; label: string; perm: string; icon: ReactNode; title: string; description: string };
 const GROUPS: { label: string; items: Section[] }[] = [
   { label: "People and access", items: [
-    { key: "users", label: "Users", perm: "admin.users", icon: <UsersIcon size={20} />, title: "Users", description: "Create accounts, assign roles and manage sign-in." },
-    { key: "roles", label: "Roles and permissions", perm: "admin.roles", icon: <ShieldCheck size={20} />, title: "Roles and permissions", description: "A role is a named set of permissions. Users can hold several roles." },
+    { key: "users", label: "Users", perm: "admin.users", icon: <UsersIcon size={16} />, title: "Users", description: "Create accounts, assign roles and manage sign-in." },
+    { key: "roles", label: "Roles and permissions", perm: "admin.roles", icon: <ShieldCheck size={16} />, title: "Roles and permissions", description: "A role is a named set of permissions. Users can hold several roles." },
   ] },
   { label: "AI", items: [
-    { key: "ai", label: "AI models", perm: "admin.ai_config", icon: <Bot size={20} />, title: "AI models", description: "Model, effort and limits for each agent, model prices and the embedding model." },
-    { key: "keys", label: "API keys", perm: "admin.api_keys", icon: <KeyRound size={20} />, title: "API keys", description: "Keys for Claude and other AI services, stored encrypted in the database." },
-    { key: "usage", label: "Usage and budget", perm: "admin.usage", icon: <Wallet size={20} />, title: "Usage and budget", description: "Calls, tokens and estimated cost by user, module and agent." },
+    { key: "ai", label: "AI models", perm: "admin.ai_config", icon: <Bot size={16} />, title: "AI models", description: "Model, effort and limits for each agent, model prices and the embedding model." },
+    { key: "keys", label: "API keys", perm: "admin.api_keys", icon: <KeyRound size={16} />, title: "API keys", description: "Keys for Claude and other AI services, stored encrypted in the database." },
+    { key: "usage", label: "Usage and budget", perm: "admin.usage", icon: <Wallet size={16} />, title: "Usage and budget", description: "Calls, tokens and estimated cost by user, module and agent." },
   ] },
   { label: "Platform", items: [
-    { key: "branding", label: "Branding", perm: "admin.branding", icon: <ImageIcon size={20} />, title: "Branding", description: "Logos used in the application and in exported documents." },
-    { key: "settings", label: "Settings", perm: "admin.settings", icon: <Settings2 size={20} />, title: "Settings", description: "Security, processing limits, retrieval and allowed sources." },
+    { key: "branding", label: "Branding", perm: "admin.branding", icon: <ImageIcon size={16} />, title: "Branding", description: "Logos used in the application and in exported documents." },
+    { key: "settings", label: "Settings", perm: "admin.settings", icon: <Settings2 size={16} />, title: "Settings", description: "Security, processing limits, retrieval and allowed sources." },
   ] },
   { label: "Monitoring", items: [
-    { key: "audit", label: "Audit log", perm: "admin.audit", icon: <ClipboardList size={20} />, title: "Audit log", description: "Every sign-in, permission change, approval and export. Records cannot be edited or deleted." },
-    { key: "jobs", label: "Jobs", perm: "admin.settings", icon: <Activity size={20} />, title: "Background jobs", description: "Document ingestion, RFP analysis, re-indexing and other long-running work." },
+    { key: "audit", label: "Audit log", perm: "admin.audit", icon: <ClipboardList size={16} />, title: "Audit log", description: "Every sign-in, permission change, approval and export. Records cannot be edited or deleted." },
+    { key: "jobs", label: "Jobs", perm: "admin.settings", icon: <Activity size={16} />, title: "Background jobs", description: "Document ingestion, RFP analysis, re-indexing and other long-running work." },
   ] },
 ];
 
@@ -42,18 +42,18 @@ function AdminHome() {
   if (!current) return <><PageHeader title="Administration" /><Alert tone="info">You have no administration permissions.</Alert></>;
   return (
     <>
-      <PageHeader title="Administration" />
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[224px_1fr]">
-        <nav aria-label="Administration sections" className="flex flex-col gap-6">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[192px_1fr]">
+        <nav aria-label="Administration sections" className="flex flex-col gap-4 lg:sticky lg:top-16 lg:self-start">
+          <div className="px-2 text-sm font-semibold">Administration</div>
           {groups.map((g) => (
             <div key={g.label}>
-              <div className="mb-2 px-3 text-sm font-semibold uppercase text-mono-600">{g.label}</div>
-              <ul className="flex flex-col gap-1">
+              <div className="mb-1 px-2 text-sm text-muted">{g.label}</div>
+              <ul className="flex flex-col">
                 {g.items.map((s) => (
                   <li key={s.key}>
                     <button onClick={() => go(s.key)} aria-current={s.key === current.key ? "page" : undefined}
-                      className={cx("flex w-full items-center gap-3 rounded border-l-4 px-3 py-2 text-left text-sm",
-                        s.key === current.key ? "border-accent bg-offwhite font-semibold text-black" : "border-transparent text-mono-700 hover:bg-offwhite hover:text-black")}>
+                      className={cx("flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm",
+                        s.key === current.key ? "bg-mono-100 font-semibold text-black" : "text-mono-600 hover:bg-offwhite hover:text-black")}>
                       {s.icon}{s.label}
                     </button>
                   </li>
@@ -63,9 +63,9 @@ function AdminHome() {
           ))}
         </nav>
         <section className="min-w-0">
-          <header className="mb-6 border-b border-border pb-4">
-            <h2 className="text-h4">{current.title}</h2>
-            <p className="mt-1 text-sm text-muted">{current.description}</p>
+          <header className="mb-6">
+            <h1 className="text-h5">{current.title}</h1>
+            <p className="text-sm text-muted">{current.description}</p>
           </header>
           {current.key === "users" && <Users />}
           {current.key === "roles" && <Roles />}
@@ -294,53 +294,41 @@ function Roles() {
   const f = filter.trim().toLowerCase();
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[288px_1fr]">
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[240px_1fr]">
       {/* role list */}
-      <aside className="flex flex-col gap-3">
-        <Button variant="primary" className="justify-center" onClick={() => newRole()}><Plus size={16} /> New role</Button>
-        <ul className="overflow-hidden rounded border border-border">
-          {roles.data.map((r) => (
-            <li key={r.id}>
-              <button onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) pick(r); }}
-                className={cx("flex w-full flex-col gap-1 border-b border-l-4 border-b-lightborder px-4 py-3 text-left",
-                  selected === r.id ? "border-l-accent bg-offwhite" : "border-l-transparent hover:bg-offwhite")}>
-                <span className="flex items-center justify-between gap-2">
-                  <span className="font-semibold">{r.name}</span>
-                  <span className="text-sm text-muted">{r.is_system ? "Built-in" : "Custom"}</span>
-                </span>
-                <span className="text-sm text-muted">{r.permissions.length} permissions · {r.user_count ?? 0} {r.user_count === 1 ? "user" : "users"}</span>
-              </button>
-            </li>
-          ))}
-          {selected === "new" && <li className="border-l-4 border-l-accent bg-offwhite px-4 py-3"><span className="font-semibold">New role</span><div className="text-sm text-muted">Not saved yet</div></li>}
-        </ul>
+      <aside className="flex flex-col gap-1">
+        <div className="mb-1 flex items-center justify-between px-2">
+          <span className="text-sm text-muted">{roles.data.length} roles</span>
+          <Button variant="ghost" onClick={() => newRole()}><Plus size={14} /> New</Button>
+        </div>
+        {roles.data.map((r) => (
+          <button key={r.id} onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) pick(r); }}
+            className={cx("flex w-full flex-col rounded px-2 py-2 text-left", selected === r.id ? "bg-mono-100" : "hover:bg-offwhite")}>
+            <span className={cx("text-sm", selected === r.id && "font-semibold")}>{r.name}</span>
+            <span className="text-sm text-muted">{r.permissions.length} permissions · {r.user_count ?? 0} {r.user_count === 1 ? "user" : "users"}{r.is_system ? "" : " · custom"}</span>
+          </button>
+        ))}
+        {selected === "new" && (
+          <div className="rounded bg-mono-100 px-2 py-2"><div className="text-sm font-semibold">New role</div><div className="text-sm text-muted">Not saved</div></div>
+        )}
       </aside>
 
       {/* role detail */}
       {draft && (
-        <section className="flex min-w-0 flex-col rounded border border-border">
-          <header className="flex flex-col gap-4 border-b border-lightborder p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-h4">{draft.name || "New role"}</h3>
-                  {draft.is_system && <Badge>Built-in</Badge>}
-                </div>
-                <p className="mt-1 text-sm text-muted">{draft.permissions.length} of {total} permissions{typeof selected === "number" && ` · ${original?.user_count ?? 0} ${original?.user_count === 1 ? "user" : "users"}`}</p>
-              </div>
-              <div className="flex gap-2">
-                {typeof selected === "number" && <Button onClick={() => newRole(original)}>Duplicate</Button>}
-                {original && !original.is_system && <Button variant="danger" onClick={remove}>Delete</Button>}
-              </div>
-            </div>
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <section className="min-w-0">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="grid min-w-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[240px_1fr]">
               <Field label="Name"><Input value={draft.name} disabled={!!draft.is_system} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Bid desk" /></Field>
               <Field label="Description"><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this role is for" /></Field>
             </div>
-            {draft.is_system && <p className="text-sm text-muted">Built-in roles cannot be renamed or deleted, but their permissions can be changed.</p>}
-          </header>
+            <div className="flex gap-1 pt-6">
+              {typeof selected === "number" && <Button variant="ghost" onClick={() => newRole(original)}>Duplicate</Button>}
+              {original && !original.is_system && <Button variant="ghost" onClick={remove}>Delete</Button>}
+            </div>
+          </div>
+          {draft.is_system && <p className="mt-2 text-sm text-muted">Built-in role: the name is fixed, permissions can be changed.</p>}
 
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-lightborder px-6 py-3">
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-b border-lightborder pb-3">
             <Segmented active={view} onChange={(k) => setView(k as any)} items={[
               { key: "permissions", label: "Permissions", count: draft.permissions.length },
               ...(can("admin.users") && typeof selected === "number" ? [{ key: "members", label: "Members", count: members.length }] : []),
@@ -348,8 +336,8 @@ function Roles() {
             {view === "permissions" && (
               <div className="flex items-center gap-2">
                 <div className="relative">
-                  <Search size={16} className="absolute left-3 top-3 text-muted" />
-                  <Input className="w-56 pl-8" placeholder="Filter permissions" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                  <Search size={14} className="absolute left-2 top-2 text-muted" />
+                  <Input className="w-48 pl-8" placeholder="Filter" value={filter} onChange={(e) => setFilter(e.target.value)} />
                 </div>
                 <Button variant="ghost" onClick={() => setOpen(Object.fromEntries(Object.keys(areas).map((a) => [a, !Object.values(open).some(Boolean)])))}>
                   {Object.values(open).some(Boolean) ? "Collapse all" : "Expand all"}
@@ -359,7 +347,7 @@ function Roles() {
           </div>
 
           {view === "permissions" && (
-            <ul className="flex-1">
+            <ul>
               {Object.entries(areas).map(([area, list]) => {
                 const shown = f ? list.filter((p) => `${area} ${p.label}`.toLowerCase().includes(f)) : list;
                 if (!shown.length) return null;
@@ -367,28 +355,28 @@ function Roles() {
                 const on = codes.filter((c) => draft.permissions.includes(c)).length;
                 const isOpen = !!f || !!open[area];
                 return (
-                  <li key={area} className="border-b border-lightborder last:border-b-0">
-                    <div className="flex items-center gap-4 px-6 py-3">
+                  <li key={area} className="border-b border-lightborder">
+                    <div className="flex items-center gap-3 py-2">
                       <Checkbox label={`All ${area} permissions`} checked={on === codes.length} indeterminate={on > 0} onChange={(v) => setPerms(codes, v)} />
                       <button className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left" onClick={() => setOpen({ ...open, [area]: !open[area] })} aria-expanded={isOpen}>
-                        <span className="min-w-0">
-                          <span className="block font-semibold">{area}</span>
-                          <span className="block text-sm text-muted">{AREA_HELP[area] || ""}</span>
-                        </span>
-                        <span className="flex shrink-0 items-center gap-3">
-                          <span className={cx("text-sm", on ? "text-black" : "text-muted")}>{on === codes.length ? "Full access" : on ? `${on} of ${codes.length}` : "No access"}</span>
-                          <ChevronRight size={20} className={cx("text-muted transition-transform", isOpen && "rotate-90")} />
+                        <span className="text-sm">{area}</span>
+                        <span className="flex shrink-0 items-center gap-2 text-sm text-muted">
+                          {on === codes.length ? "All" : on ? `${on} of ${codes.length}` : "None"}
+                          <ChevronRight size={16} className={cx("transition-transform", isOpen && "rotate-90")} />
                         </span>
                       </button>
                     </div>
                     {isOpen && (
-                      <div className="grid grid-cols-1 gap-x-8 gap-y-2 bg-offwhite px-6 py-4 pl-16 md:grid-cols-2">
-                        {shown.map((p) => (
-                          <label key={p.code} className="flex cursor-pointer items-center gap-3 text-sm">
-                            <Checkbox label={`${area}: ${p.label}`} checked={draft.permissions.includes(p.code)} onChange={(v) => setPerms([p.code], v)} />
-                            {p.label}
-                          </label>
-                        ))}
+                      <div className="pb-3 pl-8">
+                        {AREA_HELP[area] && <p className="mb-2 text-sm text-muted">{AREA_HELP[area]}</p>}
+                        <div className="grid grid-cols-1 gap-x-8 gap-y-1 md:grid-cols-2">
+                          {shown.map((p) => (
+                            <label key={p.code} className="flex cursor-pointer items-center gap-2 py-1 text-sm">
+                              <Checkbox label={`${area}: ${p.label}`} checked={draft.permissions.includes(p.code)} onChange={(v) => setPerms([p.code], v)} />
+                              {p.label}
+                            </label>
+                          ))}
+                        </div>
                       </div>
                     )}
                   </li>
@@ -398,28 +386,29 @@ function Roles() {
           )}
 
           {view === "members" && (
-            <div className="flex-1 p-6">
-              {members.length === 0 ? <p className="text-sm text-muted">No active users have this role. Assign roles from the Users page.</p> : (
-                <ul className="flex flex-col divide-y divide-lightborder">
+            <div className="py-2">
+              {members.length === 0 ? <p className="py-2 text-sm text-muted">No active users have this role.</p> : (
+                <ul className="divide-y divide-lightborder">
                   {members.map((u) => (
-                    <li key={u.id} className="flex items-center gap-3 py-3">
+                    <li key={u.id} className="flex items-center gap-3 py-2">
                       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-mono-100 text-sm font-semibold text-mono-700">{initials(u.full_name)}</span>
-                      <div className="min-w-0 flex-1"><div className="font-semibold">{u.full_name}</div><div className="text-sm text-muted">{u.username}{u.email && ` · ${u.email}`}</div></div>
-                      {!u.is_active && <Badge>Deactivated</Badge>}
+                      <span className="text-sm">{u.full_name}</span>
+                      <span className="text-sm text-muted">{u.username}</span>
                     </li>
                   ))}
                 </ul>
               )}
-              <Link href="/admin?tab=users" className="mt-4 inline-flex items-center gap-1 text-sm font-semibold underline">Manage users <ChevronRight size={16} /></Link>
+              <Link href="/admin?tab=users" className="mt-2 inline-flex items-center gap-1 text-sm text-mono-700 underline">Manage users</Link>
             </div>
           )}
 
-          <footer className="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 border-t border-lightborder bg-white px-6 py-4">
-            {msg && <span className={cx("mr-auto text-sm", msg.tone === "error" ? "text-error" : "text-success")}>{msg.text}</span>}
-            {!msg && <span className="mr-auto text-sm text-muted">{dirty ? "Unsaved changes" : "All changes saved"}</span>}
-            <Button variant="ghost" disabled={!dirty || saving} onClick={() => selected === "new" ? (roles.data!.length ? pick(roles.data![0]) : setDraft(null)) : original && pick(original)}>Discard</Button>
-            <Button variant="primary" loading={saving} disabled={!dirty || !draft.name.trim()} onClick={save}>{selected === "new" ? "Create role" : "Save changes"}</Button>
-          </footer>
+          {(dirty || msg) && (
+            <div className="sticky bottom-4 mt-6 flex items-center justify-end gap-3 rounded border border-border bg-white px-4 py-2 shadow-sm">
+              <span className={cx("mr-auto text-sm", msg?.tone === "error" ? "text-error" : msg ? "text-success" : "text-muted")}>{msg ? msg.text : "Unsaved changes"}</span>
+              {dirty && <Button variant="ghost" disabled={saving} onClick={() => selected === "new" ? (roles.data!.length ? pick(roles.data![0]) : setDraft(null)) : original && pick(original)}>Discard</Button>}
+              {dirty && <Button variant="primary" loading={saving} disabled={!draft.name.trim()} onClick={save}>{selected === "new" ? "Create role" : "Save"}</Button>}
+            </div>
+          )}
         </section>
       )}
     </div>

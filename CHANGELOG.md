@@ -13,6 +13,10 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Connection test for OpenAI and Gemini keys.
 
 ### Changed
+- Minimalist pass across the application: 14px interface text, 32px buttons and fields, slimmer main menu and top
+  bar, smaller icons, softer section menu, one heading per admin page, crisper 6px corners, smaller switches.
+- Roles and permissions simplified: plain role list, compact permission rows (All / x of y / None), descriptions only
+  when a group is expanded, and a save bar that appears only when there are unsaved changes.
 - Administration redesigned: grouped side navigation (People and access, AI, Platform, Monitoring) with a title and
   description for each section; no tab scroll arrows.
 - Settings are now forms with labelled fields, units, on/off switches, validation, and Save/Discard per section,
