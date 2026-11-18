@@ -3,6 +3,17 @@
 Versions follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
 Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSION` file.
 
+## Unreleased
+
+### Changed
+- Administration redesigned: grouped side navigation (People and access, AI, Platform, Monitoring) with a title and
+  description for each section; no tab scroll arrows.
+- Settings are now forms with labelled fields, units, on/off switches, validation, and Save/Discard per section,
+  replacing raw JSON editing. Allowed URL domains are managed as a list.
+- Users: search, initials avatars, role chips, and role assignment with switches.
+- Roles: access shown as "n of N permissions"; the role editor groups permissions by area with All/None and switches.
+- Knowledge Hub sizing rules are edited with a form (input ranges and hardware values) instead of JSON.
+
 ## 1.0.0 — 2026-11-18
 
 First release of the Motadata Presales Intelligence Platform (Master Specification v1.3, without Module 1).

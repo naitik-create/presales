@@ -48,7 +48,7 @@ const config: Config = {
     fontWeight: { normal: "400", semibold: "600" },
     borderRadius: { none: "0", sm: "4px", DEFAULT: "8px", lg: "12px", full: "9999px" },
     extend: {
-      width: { sidebar: "256px", "sidebar-collapsed": "64px", 12: "48px", 32: "128px", 40: "160px", 96: "384px" },
+      width: { sidebar: "256px", "sidebar-collapsed": "64px", 12: "48px", 24: "96px", 32: "128px", 40: "160px", 56: "224px", 96: "384px" },
       maxWidth: { sm: "384px", content: "1440px", prose: "768px" },
     },
   },

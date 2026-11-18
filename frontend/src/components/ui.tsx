@@ -1,7 +1,7 @@
 "use client";
 /** Shadcn-style primitives restyled with the brand tokens. No component hardcodes a colour, size or spacing value. */
 import { AlertTriangle, CheckCircle2, Info, Loader2, X, XCircle } from "lucide-react";
-import { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes, useEffect } from "react";
+import { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes, useEffect, useState } from "react";
 
 export function cx(...c: (string | false | null | undefined)[]) {
   return c.filter(Boolean).join(" ");
@@ -133,7 +133,7 @@ export function Table({ head, children, empty }: { head: ReactNode[]; children: 
 
 export function Tabs({ tabs, active, onChange }: { tabs: { key: string; label: string }[]; active: string; onChange: (k: string) => void }) {
   return (
-    <div className="mb-4 flex gap-1 overflow-x-auto border-b border-border" role="tablist">
+    <div className="no-scrollbar mb-6 flex gap-1 overflow-x-auto border-b border-border" role="tablist">
       {tabs.map((t) => (
         <button key={t.key} role="tab" aria-selected={active === t.key} onClick={() => onChange(t.key)}
           className={cx("-mb-px whitespace-nowrap border-b-2 px-4 py-2 text-sm font-semibold",
@@ -183,6 +183,85 @@ export function Progress({ value }: { value: number }) {
   return (
     <div className="h-2 w-full overflow-hidden rounded-full bg-mono-100" role="progressbar" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100}>
       <div className="h-full bg-black transition-all" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
+    </div>
+  );
+}
+
+/** On/off switch for boolean settings. */
+export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <button type="button" role="switch" aria-checked={checked} aria-label={label} disabled={disabled} onClick={() => onChange(!checked)}
+      className={cx("relative inline-flex h-6 w-12 shrink-0 items-center rounded-full border transition-colors disabled:opacity-50",
+        checked ? "border-black bg-black" : "border-mono-300 bg-mono-200")}>
+      <span className={cx("inline-block h-5 w-5 rounded-full bg-white transition-transform", checked ? "translate-x-6" : "translate-x-px")} />
+    </button>
+  );
+}
+
+/** A labelled settings row: title and help text on the left, the control on the right. */
+export function SettingRow({ title, help, children }: { title: string; help?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 border-b border-lightborder py-4 last:border-b-0 md:flex-row md:items-center md:justify-between md:gap-8">
+      <div className="min-w-0 md:max-w-prose">
+        <div className="text-sm font-semibold">{title}</div>
+        {help && <div className="text-sm text-muted">{help}</div>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+export function NumberInput({ value, onChange, unit, min, max, step }: { value: number | string; onChange: (v: number) => void; unit?: string; min?: number; max?: number; step?: number }) {
+  return (
+    <div className="flex items-center overflow-hidden rounded border border-border focus-within:border-black">
+      <input type="number" value={value} min={min} max={max} step={step ?? 1}
+        onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+        className="w-24 bg-white px-3 py-2 text-right text-sm focus:outline-none" />
+      {unit && <span className="border-l border-border bg-offwhite px-3 py-2 text-sm text-muted">{unit}</span>}
+    </div>
+  );
+}
+
+/** Editable list of short values, such as domain names. */
+export function TagInput({ values, onChange, placeholder, validate }: { values: string[]; onChange: (v: string[]) => void; placeholder?: string; validate?: (v: string) => string | null }) {
+  const [draft, setDraft] = useState("");
+  const [err, setErr] = useState("");
+  const add = () => {
+    const v = draft.trim().toLowerCase();
+    if (!v) return;
+    const problem = validate?.(v);
+    if (problem) { setErr(problem); return; }
+    if (!values.includes(v)) onChange([...values, v]);
+    setDraft(""); setErr("");
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        {values.map((v) => (
+          <span key={v} className="inline-flex items-center gap-1 rounded-full border border-border bg-offwhite py-1 pl-3 pr-1 text-sm">
+            {v}
+            <button type="button" aria-label={`Remove ${v}`} className="rounded-full p-1 hover:bg-mono-200" onClick={() => onChange(values.filter((x) => x !== v))}><X size={12} /></button>
+          </span>
+        ))}
+        {values.length === 0 && <span className="text-sm text-muted">None</span>}
+      </div>
+      <div className="flex gap-2">
+        <Input value={draft} placeholder={placeholder} onChange={(e) => { setDraft(e.target.value); setErr(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+        <Button type="button" onClick={add}>Add</Button>
+      </div>
+      {err && <span className="text-sm text-error">{err}</span>}
+    </div>
+  );
+}
+
+/** Footer for a settings form: shows unsaved state and save/discard actions. */
+export function SaveBar({ dirty, saving, onSave, onReset, savedAt }: { dirty: boolean; saving?: boolean; onSave: () => void; onReset: () => void; savedAt?: string }) {
+  return (
+    <div className="mt-2 flex items-center justify-end gap-3 border-t border-lightborder pt-4">
+      <span className="mr-auto text-sm text-muted">{dirty ? "Unsaved changes" : savedAt ? `Saved ${savedAt}` : ""}</span>
+      <Button variant="ghost" onClick={onReset} disabled={!dirty || saving}>Discard</Button>
+      <Button variant="primary" onClick={onSave} disabled={!dirty} loading={saving}>Save changes</Button>
     </div>
   );
 }

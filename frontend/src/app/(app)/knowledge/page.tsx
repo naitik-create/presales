@@ -1,8 +1,8 @@
 "use client";
-import { Download, Link2, Plus, RefreshCw, Upload } from "lucide-react";
+import { Download, Link2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Select, Spinner, StatusBadge, Table, Tabs, Textarea } from "@/components/ui";
+import { Alert, Badge, Button, Card, Field, Input, Modal, NumberInput, PageHeader, Select, SettingRow, Spinner, StatusBadge, Table, Tabs, Textarea, Toggle } from "@/components/ui";
 import { api, download, fmtDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
@@ -195,39 +195,113 @@ function SourceModal({ id, onClose, onChanged }: { id: number; onClose: () => vo
   );
 }
 
+type Range = { name: string; min: string; max: string };
+type Spec = { name: string; value: string };
+
+function toForm(r: any) {
+  return {
+    id: r.id, product: r.product, component: r.component, source: r.source, sort: r.sort ?? 100, active: r.active ?? true,
+    conditions: Object.entries(r.conditions || {}).map(([name, b]: any) => ({ name, min: b?.[0] ?? "", max: b?.[1] ?? "" })) as Range[],
+    result: Object.entries(r.result || {}).map(([name, value]) => ({ name, value: String(value) })) as Spec[],
+  };
+}
+
 function Sizing() {
   const { can } = useSession();
   const { data, reload } = useApi<any[]>("/ask/sizing-rules");
-  const [edit, setEdit] = useState<any | null>(null);
-  const [text, setText] = useState("");
+  const [edit, setEdit] = useState<ReturnType<typeof toForm> | null>(null);
   const [err, setErr] = useState("");
-  const blank = { product: "ObserveOps", component: "Application server", conditions: { monitored_devices: [0, 1000] }, result: { cpu: "8 vCPU", ram: "32 GB", disk: "500 GB SSD" }, source: "Sizing guide v1, table 2", sort: 100, active: true };
+  const manage = can("knowledge.manage_sections");
+  const blank = toForm({ product: "ObserveOps", component: "", conditions: { monitored_devices: [0, null] }, result: { cpu: "", ram: "", disk: "" }, source: "" });
+
   async function save() {
+    if (!edit) return;
+    setErr("");
+    const conditions: Record<string, (number | null)[]> = {};
+    for (const c of edit.conditions) {
+      if (!c.name.trim()) continue;
+      conditions[c.name.trim()] = [c.min === "" ? null : Number(c.min), c.max === "" ? null : Number(c.max)];
+    }
+    const result: Record<string, string> = {};
+    for (const r of edit.result) if (r.name.trim()) result[r.name.trim()] = r.value;
+    if (!edit.component.trim()) return setErr("Enter the component, for example Application server");
+    if (!Object.keys(conditions).length) return setErr("Add at least one input range");
+    if (!Object.keys(result).length) return setErr("Add at least one hardware value");
+    const body = { product: edit.product, component: edit.component, conditions, result, source: edit.source, sort: Number(edit.sort) || 100, active: edit.active };
     try {
-      const body = JSON.parse(text);
       if (edit.id) await api.put(`/ask/sizing-rules/${edit.id}`, body); else await api.post("/ask/sizing-rules", body);
       setEdit(null); reload();
     } catch (e) { setErr((e as Error).message); }
   }
+  const set = (patch: Partial<ReturnType<typeof toForm>>) => edit && setEdit({ ...edit, ...patch });
+  const fmtRange = (b: any[]) => `${b[0] ?? 0} to ${b[1] ?? "no limit"}`;
+
   return (
     <>
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-muted">The product team&apos;s sizing guide as a rule table. Ask Motadata and RFP Intelligence answer sizing only from these rules. Conditions are [min, max) ranges.</p>
-        {can("knowledge.manage_sections") && <Button variant="primary" onClick={() => { setEdit(blank); setText(JSON.stringify(blank, null, 2)); }}><Plus size={16} /> Rule</Button>}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <p className="max-w-prose text-sm text-muted">The product team&apos;s sizing guide as a rule table. Ask Motadata and RFP Intelligence answer sizing questions only from these rules; a rule applies when every input falls inside its range (lower bound included, upper bound excluded).</p>
+        {manage && <Button variant="primary" onClick={() => { setErr(""); setEdit(blank); }}><Plus size={16} /> Sizing rule</Button>}
       </div>
-      <Table head={["Product", "Component", "Conditions", "Result", "Source", ""]} empty="No sizing rules. Sizing questions will be referred to the product team.">
+      <Table head={["Product", "Component", "Applies when", "Recommended hardware", "Source", ""]} empty="No sizing rules yet. Sizing questions are referred to the product team.">
         {(data || []).map((r) => (
-          <tr key={r.id}><td>{r.product}</td><td>{r.component}</td>
-            <td>{Object.entries(r.conditions).map(([k, v]: any) => `${k} ${v[0] ?? "0"}–${v[1] ?? "∞"}`).join("; ")}</td>
-            <td>{Object.entries(r.result).map(([k, v]) => `${k}: ${v}`).join(", ")}</td><td>{r.source}</td>
-            <td>{can("knowledge.manage_sections") && <Button variant="ghost" onClick={() => { setEdit(r); const { id: _i, ...rest } = r; setText(JSON.stringify(rest, null, 2)); }}>Edit</Button>}</td></tr>
+          <tr key={r.id}>
+            <td>{r.product}{!r.active && <div><Badge>Inactive</Badge></div>}</td>
+            <td className="font-semibold">{r.component}</td>
+            <td>{Object.entries(r.conditions).map(([k, v]: any) => <div key={k} className="text-sm"><span className="text-muted">{k.replace(/_/g, " ")}:</span> {fmtRange(v)}</div>)}</td>
+            <td>{Object.entries(r.result).map(([k, v]) => <div key={k} className="text-sm"><span className="text-muted">{k.toUpperCase()}:</span> {String(v)}</div>)}</td>
+            <td className="text-sm text-muted">{r.source}</td>
+            <td className="text-right">{manage && <Button variant="ghost" onClick={() => { setErr(""); setEdit(toForm(r)); }}>Edit</Button>}</td>
+          </tr>
         ))}
       </Table>
-      <Modal open={!!edit} title={edit?.id ? "Edit sizing rule" : "New sizing rule"} onClose={() => setEdit(null)}>
-        {err && <Alert tone="error">{err}</Alert>}
-        <Textarea rows={16} value={text} onChange={(e) => setText(e.target.value)} />
-        <div className="mt-2 flex gap-2"><Button variant="primary" onClick={save}>Save</Button>
-          {edit?.id && <Button variant="danger" onClick={() => api.del(`/ask/sizing-rules/${edit.id}`).then(() => { setEdit(null); reload(); })}>Delete</Button>}</div>
+      <Modal open={!!edit} title={edit?.id ? "Edit sizing rule" : "New sizing rule"} onClose={() => setEdit(null)} wide>
+        {edit && <div className="flex flex-col gap-6">
+          {err && <Alert tone="error">{err}</Alert>}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <Field label="Product"><Select value={edit.product} onChange={(e) => set({ product: e.target.value })} options={["ObserveOps", "ServiceOps", "Both"]} /></Field>
+            <Field label="Component"><Input value={edit.component} placeholder="e.g. Application server" onChange={(e) => set({ component: e.target.value })} /></Field>
+            <Field label="Source"><Input value={edit.source} placeholder="e.g. Sizing guide v3, table 2" onChange={(e) => set({ source: e.target.value })} /></Field>
+          </div>
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <section className="rounded border border-border">
+              <header className="border-b border-lightborder bg-offwhite px-4 py-2"><div className="text-sm font-semibold">Applies when</div>
+                <div className="text-sm text-muted">Input names must match what users ask about, e.g. monitored_devices, eps, endpoints.</div></header>
+              <div className="flex flex-col gap-2 p-4">
+                {edit.conditions.map((c, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_96px_96px_32px] items-center gap-2">
+                    <Input value={c.name} placeholder="input name" onChange={(e) => set({ conditions: edit.conditions.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
+                    <Input type="number" value={c.min} placeholder="from" onChange={(e) => set({ conditions: edit.conditions.map((x, j) => j === i ? { ...x, min: e.target.value } : x) })} />
+                    <Input type="number" value={c.max} placeholder="below" onChange={(e) => set({ conditions: edit.conditions.map((x, j) => j === i ? { ...x, max: e.target.value } : x) })} />
+                    <button aria-label="Remove range" className="rounded p-1 hover:bg-offwhite" onClick={() => set({ conditions: edit.conditions.filter((_, j) => j !== i) })}><Trash2 size={16} /></button>
+                  </div>
+                ))}
+                <div><Button variant="ghost" onClick={() => set({ conditions: [...edit.conditions, { name: "", min: "", max: "" }] })}><Plus size={16} /> Add input range</Button></div>
+              </div>
+            </section>
+            <section className="rounded border border-border">
+              <header className="border-b border-lightborder bg-offwhite px-4 py-2"><div className="text-sm font-semibold">Recommended hardware</div>
+                <div className="text-sm text-muted">For example CPU 16 vCPU, RAM 64 GB, Disk 2 TB SSD, Nodes 2.</div></header>
+              <div className="flex flex-col gap-2 p-4">
+                {edit.result.map((r, i) => (
+                  <div key={i} className="grid grid-cols-[128px_1fr_32px] items-center gap-2">
+                    <Input value={r.name} placeholder="cpu" onChange={(e) => set({ result: edit.result.map((x, j) => j === i ? { ...x, name: e.target.value } : x) })} />
+                    <Input value={r.value} placeholder="16 vCPU" onChange={(e) => set({ result: edit.result.map((x, j) => j === i ? { ...x, value: e.target.value } : x) })} />
+                    <button aria-label="Remove value" className="rounded p-1 hover:bg-offwhite" onClick={() => set({ result: edit.result.filter((_, j) => j !== i) })}><Trash2 size={16} /></button>
+                  </div>
+                ))}
+                <div><Button variant="ghost" onClick={() => set({ result: [...edit.result, { name: "", value: "" }] })}><Plus size={16} /> Add value</Button></div>
+              </div>
+            </section>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <SettingRow title="Active" help="Inactive rules are ignored when answering."><Toggle label="Active" checked={edit.active} onChange={(v) => set({ active: v })} /></SettingRow>
+            <SettingRow title="Order" help="Lower numbers are checked first when ranges overlap."><NumberInput value={edit.sort} min={0} onChange={(v) => set({ sort: v })} /></SettingRow>
+          </div>
+          <div className="flex justify-between gap-2 border-t border-lightborder pt-4">
+            <div>{edit.id && <Button variant="danger" onClick={() => confirm("Delete this sizing rule?") && api.del(`/ask/sizing-rules/${edit.id}`).then(() => { setEdit(null); reload(); })}>Delete rule</Button>}</div>
+            <div className="flex gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button><Button variant="primary" onClick={save}>{edit.id ? "Save rule" : "Create rule"}</Button></div>
+          </div>
+        </div>}
       </Modal>
     </>
   );

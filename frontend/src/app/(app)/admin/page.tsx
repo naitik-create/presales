@@ -1,36 +1,88 @@
 "use client";
-import { Plus } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
-import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Progress, Select, Spinner, StatusBadge, Table, Tabs, Textarea } from "@/components/ui";
+import { Activity, Bot, Briefcase, ClipboardList, Image as ImageIcon, KeyRound, Plus, Search, Settings2, ShieldCheck, Users as UsersIcon, Wallet } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
+import { Alert, Badge, Button, Card, cx, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
 import { api, fmtDate, money } from "@/lib/api";
 import { refreshBranding, useBranding } from "@/lib/branding";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
 
+type Section = { key: string; label: string; perm: string; icon: ReactNode; title: string; description: string };
+const GROUPS: { label: string; items: Section[] }[] = [
+  { label: "People and access", items: [
+    { key: "users", label: "Users", perm: "admin.users", icon: <UsersIcon size={20} />, title: "Users", description: "Create accounts, assign roles and manage sign-in." },
+    { key: "roles", label: "Roles and permissions", perm: "admin.roles", icon: <ShieldCheck size={20} />, title: "Roles and permissions", description: "A role is a named set of permissions. Users can hold several roles." },
+  ] },
+  { label: "AI", items: [
+    { key: "ai", label: "AI models", perm: "admin.ai_config", icon: <Bot size={20} />, title: "AI models", description: "Model, effort and limits for each agent, model prices and the embedding model." },
+    { key: "keys", label: "API keys", perm: "admin.api_keys", icon: <KeyRound size={20} />, title: "API keys", description: "Keys for Claude and other AI services, stored encrypted in the database." },
+    { key: "usage", label: "Usage and budget", perm: "admin.usage", icon: <Wallet size={20} />, title: "Usage and budget", description: "Calls, tokens and estimated cost by user, module and agent." },
+  ] },
+  { label: "Platform", items: [
+    { key: "branding", label: "Branding", perm: "admin.branding", icon: <ImageIcon size={20} />, title: "Branding", description: "Logos used in the application and in exported documents." },
+    { key: "settings", label: "Settings", perm: "admin.settings", icon: <Settings2 size={20} />, title: "Settings", description: "Security, processing limits, retrieval and allowed sources." },
+  ] },
+  { label: "Monitoring", items: [
+    { key: "audit", label: "Audit log", perm: "admin.audit", icon: <ClipboardList size={20} />, title: "Audit log", description: "Every sign-in, permission change, approval and export. Records cannot be edited or deleted." },
+    { key: "jobs", label: "Jobs", perm: "admin.settings", icon: <Activity size={20} />, title: "Background jobs", description: "Document ingestion, RFP analysis, re-indexing and other long-running work." },
+  ] },
+];
+
 function AdminHome() {
   const { can } = useSession();
-  const all = [
-    ["users", "Users", "admin.users"], ["roles", "Roles and permissions", "admin.roles"], ["ai", "AI models", "admin.ai_config"],
-    ["keys", "API keys", "admin.api_keys"], ["usage", "Usage and budget", "admin.usage"],
-    ["branding", "Branding", "admin.branding"], ["settings", "Settings", "admin.settings"], ["audit", "Audit log", "admin.audit"], ["jobs", "Jobs", "admin.settings"],
-  ].filter(([, , p]) => can(p)).map(([key, label]) => ({ key, label }));
-  const [tab, setTab] = useState(useSearchParams().get("tab") || all[0]?.key || "users");
+  const router = useRouter();
+  const params = useSearchParams();
+  const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => can(i.perm)) })).filter((g) => g.items.length);
+  const flat = groups.flatMap((g) => g.items);
+  const [tab, setTab] = useState(params.get("tab") || flat[0]?.key || "users");
+  const current = flat.find((s) => s.key === tab) || flat[0];
+  const go = (k: string) => { setTab(k); router.replace(`/admin?tab=${k}`, { scroll: false }); };
+  if (!current) return <><PageHeader title="Administration" /><Alert tone="info">You have no administration permissions.</Alert></>;
   return (
     <>
       <PageHeader title="Administration" />
-      <Tabs tabs={all} active={tab} onChange={setTab} />
-      {tab === "users" && <Users />}
-      {tab === "roles" && <Roles />}
-      {tab === "ai" && <AI />}
-      {tab === "keys" && <ApiKeys />}
-      {tab === "branding" && <BrandingTab />}
-      {tab === "usage" && <Usage />}
-      {tab === "settings" && <Settings />}
-      {tab === "audit" && <Audit />}
-      {tab === "jobs" && <Jobs />}
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[224px_1fr]">
+        <nav aria-label="Administration sections" className="flex flex-col gap-6">
+          {groups.map((g) => (
+            <div key={g.label}>
+              <div className="mb-2 px-3 text-sm font-semibold uppercase text-mono-600">{g.label}</div>
+              <ul className="flex flex-col gap-1">
+                {g.items.map((s) => (
+                  <li key={s.key}>
+                    <button onClick={() => go(s.key)} aria-current={s.key === current.key ? "page" : undefined}
+                      className={cx("flex w-full items-center gap-3 rounded border-l-4 px-3 py-2 text-left text-sm",
+                        s.key === current.key ? "border-accent bg-offwhite font-semibold text-black" : "border-transparent text-mono-700 hover:bg-offwhite hover:text-black")}>
+                      {s.icon}{s.label}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </nav>
+        <section className="min-w-0">
+          <header className="mb-6 border-b border-border pb-4">
+            <h2 className="text-h4">{current.title}</h2>
+            <p className="mt-1 text-sm text-muted">{current.description}</p>
+          </header>
+          {current.key === "users" && <Users />}
+          {current.key === "roles" && <Roles />}
+          {current.key === "ai" && <AI />}
+          {current.key === "keys" && <ApiKeys />}
+          {current.key === "branding" && <BrandingTab />}
+          {current.key === "usage" && <Usage />}
+          {current.key === "settings" && <Settings />}
+          {current.key === "audit" && <Audit />}
+          {current.key === "jobs" && <Jobs />}
+        </section>
+      </div>
     </>
   );
+}
+
+function initials(name: string) {
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join("") || "?";
 }
 
 function Users() {
@@ -39,7 +91,10 @@ function Users() {
   const [edit, setEdit] = useState<any | null>(null);
   const [secret, setSecret] = useState("");
   const [err, setErr] = useState("");
+  const [q, setQ] = useState("");
+  const list = (users.data || []).filter((u) => !q || `${u.full_name} ${u.username} ${u.email}`.toLowerCase().includes(q.toLowerCase()));
   async function save() {
+    setErr("");
     try {
       if (edit.id) await api.patch(`/admin/users/${edit.id}`, { full_name: edit.full_name, email: edit.email, role_ids: edit.role_ids, is_active: edit.is_active, is_scoring_participant: edit.is_scoring_participant });
       else { const r = await api.post("/admin/users", edit); setSecret(`Temporary password for ${r.username}: ${r.temporary_password}`); }
@@ -48,33 +103,67 @@ function Users() {
   }
   return (
     <>
-      {secret && <div className="mb-4"><Alert tone="info">{secret} — share it securely; the user must change it at first sign-in.</Alert></div>}
-      <div className="mb-4 flex justify-end"><Button variant="primary" onClick={() => setEdit({ username: "", full_name: "", email: "", role_ids: [], is_scoring_participant: false })}><Plus size={16} /> New user</Button></div>
-      <Table head={["User", "Roles", "Scoring participant", "Status", "Last sign-in", ""]}>
-        {(users.data || []).map((u) => (
-          <tr key={u.id}><td className="font-semibold">{u.full_name}<div className="text-sm font-normal text-muted">{u.username} {u.email}</div></td>
-            <td>{u.roles.map((r: any) => r.name).join(", ") || <span className="text-muted">No roles (no access)</span>}</td>
-            <td>{u.is_scoring_participant ? "Yes" : ""}</td>
+      {secret && <div className="mb-4"><Alert tone="info">{secret}. Share it securely; the user must change it at first sign-in.</Alert></div>}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+        <div className="relative w-full max-w-sm">
+          <Search size={16} className="absolute left-3 top-3 text-muted" />
+          <Input className="pl-8" placeholder="Search users" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <Button variant="primary" onClick={() => { setErr(""); setEdit({ username: "", full_name: "", email: "", role_ids: [], is_scoring_participant: false }); }}><Plus size={16} /> New user</Button>
+      </div>
+      <Table head={["User", "Roles", "Status", "Last sign-in", ""]} empty="No users match.">
+        {list.map((u) => (
+          <tr key={u.id}>
+            <td>
+              <div className="flex items-center gap-3">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-mono-100 text-sm font-semibold text-mono-700">{initials(u.full_name)}</span>
+                <div><div className="font-semibold">{u.full_name}</div><div className="text-sm text-muted">{u.username}{u.email && ` · ${u.email}`}</div></div>
+              </div>
+            </td>
+            <td>
+              <div className="flex flex-wrap gap-1">
+                {u.roles.map((r: any) => <span key={r.id} className="rounded border border-border bg-offwhite px-2 text-sm">{r.name}</span>)}
+                {!u.roles.length && <span className="text-sm text-muted">No roles (no access)</span>}
+                {u.is_scoring_participant && <span className="rounded border border-border px-2 text-sm text-muted">Scoring participant</span>}
+              </div>
+            </td>
             <td>{u.is_active ? (u.locked ? <Badge tone="warning">Locked</Badge> : <Badge tone="success">Active</Badge>) : <Badge>Deactivated</Badge>}</td>
-            <td>{fmtDate(u.last_login_at, true)}</td>
-            <td className="whitespace-nowrap"><Button variant="ghost" onClick={() => setEdit({ ...u, role_ids: u.roles.map((r: any) => r.id) })}>Edit</Button>
-              <Button variant="ghost" onClick={async () => { const r = await api.post(`/admin/users/${u.id}/reset-password`); setSecret(`Temporary password for ${u.username}: ${r.temporary_password}`); }}>Reset password</Button></td></tr>
+            <td className="whitespace-nowrap text-muted">{fmtDate(u.last_login_at, true) || "Never"}</td>
+            <td className="whitespace-nowrap text-right">
+              <Button variant="ghost" onClick={() => { setErr(""); setEdit({ ...u, role_ids: u.roles.map((r: any) => r.id) }); }}>Edit</Button>
+              <Button variant="ghost" onClick={async () => { const r = await api.post(`/admin/users/${u.id}/reset-password`); setSecret(`Temporary password for ${u.username}: ${r.temporary_password}`); }}>Reset password</Button>
+            </td>
+          </tr>
         ))}
       </Table>
-      <Modal open={!!edit} title={edit?.id ? `Edit ${edit.username}` : "New user"} onClose={() => setEdit(null)}>
+      <Modal open={!!edit} title={edit?.id ? `Edit ${edit.full_name}` : "New user"} onClose={() => setEdit(null)}>
         {edit && <div className="flex flex-col gap-4">
           {err && <Alert tone="error">{err}</Alert>}
-          {!edit.id && <Field label="Username"><Input value={edit.username} onChange={(e) => setEdit({ ...edit, username: e.target.value })} /></Field>}
-          <Field label="Full name"><Input value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} /></Field>
-          <Field label="Email"><Input value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
-          <Field label="Roles" hint="A user with no roles has no permissions.">
-            <div className="flex flex-col gap-1">{(roles.data || []).map((r) => (
-              <label key={r.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.role_ids.includes(r.id)}
-                onChange={(e) => setEdit({ ...edit, role_ids: e.target.checked ? [...edit.role_ids, r.id] : edit.role_ids.filter((x: number) => x !== r.id) })} />{r.name}</label>))}</div>
-          </Field>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.is_scoring_participant} onChange={(e) => setEdit({ ...edit, is_scoring_participant: e.target.checked })} /> Scoring participant</label>
-          {edit.id && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.is_active} onChange={(e) => setEdit({ ...edit, is_active: e.target.checked })} /> Active</label>}
-          <div><Button variant="primary" onClick={save}>Save</Button></div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {!edit.id && <Field label="Username"><Input value={edit.username} onChange={(e) => setEdit({ ...edit, username: e.target.value })} /></Field>}
+            <Field label="Full name"><Input value={edit.full_name} onChange={(e) => setEdit({ ...edit, full_name: e.target.value })} /></Field>
+            <Field label="Email"><Input type="email" value={edit.email} onChange={(e) => setEdit({ ...edit, email: e.target.value })} /></Field>
+          </div>
+          <div>
+            <div className="mb-1 text-sm font-semibold">Roles</div>
+            <p className="mb-2 text-sm text-muted">A user with no roles has no permissions.</p>
+            <div className="rounded border border-border">
+              {(roles.data || []).map((r) => (
+                <div key={r.id} className="flex items-center justify-between gap-4 border-b border-lightborder px-3 py-2 last:border-b-0">
+                  <div><div className="text-sm font-semibold">{r.name}</div><div className="text-sm text-muted">{r.description}</div></div>
+                  <Toggle label={r.name} checked={edit.role_ids.includes(r.id)}
+                    onChange={(on) => setEdit({ ...edit, role_ids: on ? [...edit.role_ids, r.id] : edit.role_ids.filter((x: number) => x !== r.id) })} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <SettingRow title="Scoring participant" help="Included in the Team Scorecard and sees their own score.">
+            <Toggle label="Scoring participant" checked={edit.is_scoring_participant} onChange={(v) => setEdit({ ...edit, is_scoring_participant: v })} />
+          </SettingRow>
+          {edit.id && <SettingRow title="Account active" help="Deactivated users cannot sign in; their history is kept.">
+            <Toggle label="Account active" checked={edit.is_active} onChange={(v) => setEdit({ ...edit, is_active: v })} />
+          </SettingRow>}
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button><Button variant="primary" onClick={save}>{edit.id ? "Save changes" : "Create user"}</Button></div>
         </div>}
       </Modal>
     </>
@@ -86,48 +175,89 @@ function Roles() {
   const perms = useApi<any[]>("/admin/permissions");
   const [edit, setEdit] = useState<any | null>(null);
   const [err, setErr] = useState("");
-  const areas: Record<string, any[]> = {};
-  (perms.data || []).forEach((p) => { (areas[p.area] ||= []).push(p); });
+  const areas = useMemo(() => {
+    const a: Record<string, any[]> = {};
+    (perms.data || []).forEach((p) => { (a[p.area] ||= []).push(p); });
+    return a;
+  }, [perms.data]);
+  const total = perms.data?.length || 0;
   async function save() {
+    setErr("");
     try {
       const body = { name: edit.name, description: edit.description, permissions: edit.permissions };
       if (edit.id) await api.put(`/admin/roles/${edit.id}`, body); else await api.post("/admin/roles", body);
       setEdit(null); roles.reload();
     } catch (e) { setErr((e as Error).message); }
   }
+  const setArea = (list: any[], on: boolean) => {
+    const codes = list.map((p) => p.code);
+    setEdit({ ...edit, permissions: on ? Array.from(new Set([...edit.permissions, ...codes])) : edit.permissions.filter((c: string) => !codes.includes(c)) });
+  };
   return (
     <>
-      <div className="mb-4 flex justify-end"><Button variant="primary" onClick={() => setEdit({ name: "", description: "", permissions: [] })}><Plus size={16} /> Custom role</Button></div>
-      <Table head={["Role", "Description", "Permissions", ""]}>
+      <div className="mb-4 flex justify-end"><Button variant="primary" onClick={() => { setErr(""); setEdit({ name: "", description: "", permissions: [] }); }}><Plus size={16} /> Custom role</Button></div>
+      <Table head={["Role", "Description", "Access", ""]}>
         {(roles.data || []).map((r) => (
-          <tr key={r.id}><td className="font-semibold">{r.name}{r.is_system && <div><Badge>Default</Badge></div>}</td><td>{r.description}</td><td>{r.permissions.length}</td>
-            <td className="whitespace-nowrap"><Button variant="ghost" onClick={() => setEdit(r)}>Edit</Button>
-              {!r.is_system && <Button variant="ghost" onClick={() => api.del(`/admin/roles/${r.id}`).then(roles.reload)}>Delete</Button>}</td></tr>
+          <tr key={r.id}>
+            <td className="whitespace-nowrap">
+              <div className="flex items-center gap-2"><Briefcase size={16} className="text-muted" /><span className="font-semibold">{r.name}</span></div>
+              <div className="pl-6 text-sm text-muted">{r.is_system ? "Built-in role" : "Custom role"}</div>
+            </td>
+            <td className="text-muted">{r.description}</td>
+            <td className="w-40">
+              <div className="text-sm">{r.permissions.length} of {total} permissions</div>
+              <Progress value={total ? (100 * r.permissions.length) / total : 0} />
+            </td>
+            <td className="whitespace-nowrap text-right">
+              <Button variant="ghost" onClick={() => { setErr(""); setEdit(r); }}>Edit</Button>
+              {!r.is_system && <Button variant="ghost" onClick={() => confirm(`Delete the role "${r.name}"?`) && api.del(`/admin/roles/${r.id}`).then(roles.reload)}>Delete</Button>}
+            </td>
+          </tr>
         ))}
       </Table>
       <Modal open={!!edit} title={edit?.id ? `Edit role: ${edit.name}` : "New role"} onClose={() => setEdit(null)} wide>
-        {edit && <div className="flex flex-col gap-4">
+        {edit && <div className="flex flex-col gap-6">
           {err && <Alert tone="error">{err}</Alert>}
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field label="Role name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <Field label="Description"><Input value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></Field>
           </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {Object.entries(areas).map(([area, list]) => (
-              <Card key={area} title={area}>
-                {list.map((p) => (
-                  <label key={p.code} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.permissions.includes(p.code)}
-                    onChange={(e) => setEdit({ ...edit, permissions: e.target.checked ? [...edit.permissions, p.code] : edit.permissions.filter((x: string) => x !== p.code) })} />{p.label}</label>
-                ))}
-              </Card>
-            ))}
+          <div className="text-sm text-muted">{edit.permissions.length} of {total} permissions granted</div>
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {Object.entries(areas).map(([area, list]) => {
+              const on = list.filter((p) => edit.permissions.includes(p.code)).length;
+              return (
+                <section key={area} className="rounded border border-border">
+                  <header className="flex items-center justify-between gap-4 border-b border-lightborder bg-offwhite px-4 py-2">
+                    <div><div className="text-sm font-semibold">{area}</div><div className="text-sm text-muted">{on} of {list.length} granted</div></div>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" onClick={() => setArea(list, true)} disabled={on === list.length}>All</Button>
+                      <Button variant="ghost" onClick={() => setArea(list, false)} disabled={on === 0}>None</Button>
+                    </div>
+                  </header>
+                  <ul>
+                    {list.map((p) => (
+                      <li key={p.code} className="flex items-center justify-between gap-4 border-b border-lightborder px-4 py-2 last:border-b-0">
+                        <span className="text-sm">{p.label}</span>
+                        <Toggle label={`${area}: ${p.label}`} checked={edit.permissions.includes(p.code)}
+                          onChange={(v) => setEdit({ ...edit, permissions: v ? [...edit.permissions, p.code] : edit.permissions.filter((x: string) => x !== p.code) })} />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              );
+            })}
           </div>
-          <div><Button variant="primary" onClick={save}>Save role</Button></div>
+          <div className="flex justify-end gap-2 border-t border-lightborder pt-4">
+            <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
+            <Button variant="primary" onClick={save} disabled={!edit.name.trim()}>{edit.id ? "Save role" : "Create role"}</Button>
+          </div>
         </div>}
       </Modal>
     </>
   );
 }
+
 
 function AI() {
   const agents = useApi<any[]>("/admin/ai/agents");
@@ -353,26 +483,105 @@ function Stat({ label, v }: { label: string; v: any }) {
   return <div><div className="text-sm text-muted">{label}</div><div className="text-h4">{v}</div></div>;
 }
 
+type FieldDef = { key: string; title: string; help: string; kind: "number" | "bool"; unit?: string; min?: number; max?: number };
+const SETTING_SECTIONS: { key: string; title: string; description: string; fields: FieldDef[] }[] = [
+  { key: "session", title: "Sign-in and sessions", description: "How long people stay signed in and how failed sign-ins are handled.", fields: [
+    { key: "hours", title: "Session length", help: "People are signed out after this long.", kind: "number", unit: "hours", min: 1, max: 168 },
+    { key: "max_login_attempts", title: "Failed sign-in limit", help: "The account is locked after this many failed attempts in a row.", kind: "number", unit: "attempts", min: 3, max: 20 },
+    { key: "lockout_minutes", title: "Lock-out period", help: "How long a locked account stays locked.", kind: "number", unit: "minutes", min: 1, max: 1440 },
+  ] },
+  { key: "password_policy", title: "Password policy", description: "Applies when users set or change their password.", fields: [
+    { key: "min_length", title: "Minimum length", help: "Shortest password allowed.", kind: "number", unit: "characters", min: 8, max: 64 },
+    { key: "require_upper", title: "Upper-case letter", help: "Require at least one A–Z.", kind: "bool" },
+    { key: "require_lower", title: "Lower-case letter", help: "Require at least one a–z.", kind: "bool" },
+    { key: "require_digit", title: "Digit", help: "Require at least one 0–9.", kind: "bool" },
+    { key: "require_symbol", title: "Symbol", help: "Require at least one character such as ! or #.", kind: "bool" },
+  ] },
+  { key: "rfp_limits", title: "RFP processing", description: "Capacity and limits for RFP analysis jobs.", fields: [
+    { key: "max_concurrent_jobs", title: "Concurrent RFP jobs", help: "RFP jobs that can run at the same time.", kind: "number", unit: "jobs", min: 1, max: 10 },
+    { key: "max_queued_jobs", title: "Queue size", help: "New jobs are refused when this many are waiting.", kind: "number", unit: "jobs", min: 1, max: 200 },
+    { key: "job_timeout_seconds", title: "Job time limit", help: "A job that runs longer than this is stopped.", kind: "number", unit: "seconds", min: 300, max: 86400 },
+    { key: "max_retries", title: "Automatic retries", help: "Times a failed job is retried before it is marked Failed.", kind: "number", unit: "retries", min: 0, max: 5 },
+    { key: "max_document_mb", title: "Maximum document size", help: "Largest single file accepted in a workspace.", kind: "number", unit: "MB", min: 1, max: 500 },
+    { key: "max_documents_per_rfp", title: "Documents per workspace", help: "Most files one RFP workspace can hold.", kind: "number", unit: "files", min: 1, max: 200 },
+  ] },
+  { key: "retrieval", title: "Knowledge retrieval", description: "How documents are split and how many passages are given to the AI. Chunk changes apply to newly ingested documents.", fields: [
+    { key: "top_k", title: "Passages per question", help: "Approved passages sent to the AI for each question.", kind: "number", unit: "passages", min: 1, max: 30 },
+    { key: "chunk_chars", title: "Passage size", help: "Length of each stored passage.", kind: "number", unit: "characters", min: 300, max: 8000 },
+    { key: "chunk_overlap", title: "Passage overlap", help: "Text repeated between neighbouring passages so nothing is cut mid-thought.", kind: "number", unit: "characters", min: 0, max: 1000 },
+  ] },
+];
+
 function Settings() {
   const { data, reload } = useApi<any>("/admin/settings");
-  const [texts, setTexts] = useState<Record<string, string>>({});
-  const [msg, setMsg] = useState<{ tone: "error" | "success"; text: string } | null>(null);
   if (!data) return <Spinner />;
-  const labels: Record<string, string> = { rfp_limits: "RFP processing limits", password_policy: "Password policy", session: "Sessions and sign-in",
-    url_fetch_allowed_domains: "Domains allowed for URL sources", retrieval: "Retrieval and chunking" };
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-      {msg && <div className="lg:col-span-2"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
-      {Object.keys(data).map((k) => (
-        <Card key={k} title={labels[k] || k}>
-          <Textarea rows={8} value={texts[k] ?? JSON.stringify(data[k], null, 2)} onChange={(e) => setTexts({ ...texts, [k]: e.target.value })} />
-          <div className="mt-2"><Button onClick={async () => {
-            try { await api.put(`/admin/settings/${k}`, JSON.parse(texts[k] ?? JSON.stringify(data[k]))); setMsg({ tone: "success", text: `${labels[k]} saved` }); reload(); }
-            catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
-          }}>Save</Button></div>
-        </Card>
-      ))}
+    <div className="flex flex-col gap-6">
+      {SETTING_SECTIONS.map((s) => <SettingsSection key={s.key} section={s} value={data[s.key]} onSaved={reload} />)}
+      <DomainsSection value={data.url_fetch_allowed_domains || []} onSaved={reload} />
     </div>
+  );
+}
+
+function SettingsSection({ section, value, onSaved }: { section: (typeof SETTING_SECTIONS)[number]; value: any; onSaved: () => void }) {
+  const [draft, setDraft] = useState<any>(value);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [savedAt, setSavedAt] = useState("");
+  useEffect(() => { setDraft(value); }, [value]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(value);
+  async function save() {
+    setSaving(true); setErr("");
+    try {
+      for (const f of section.fields) {
+        if (f.kind === "number" && (draft[f.key] < (f.min ?? -Infinity) || draft[f.key] > (f.max ?? Infinity))) {
+          throw new Error(`${f.title} must be between ${f.min} and ${f.max}`);
+        }
+      }
+      await api.put(`/admin/settings/${section.key}`, draft);
+      setSavedAt(new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setSaving(false); }
+  }
+  return (
+    <Card title={section.title}>
+      <p className="-mt-1 mb-2 text-sm text-muted">{section.description}</p>
+      {err && <Alert tone="error">{err}</Alert>}
+      {section.fields.map((f) => (
+        <SettingRow key={f.key} title={f.title} help={f.help}>
+          {f.kind === "bool"
+            ? <Toggle label={f.title} checked={!!draft[f.key]} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />
+            : <NumberInput value={draft[f.key] ?? ""} unit={f.unit} min={f.min} max={f.max} onChange={(v) => setDraft({ ...draft, [f.key]: v })} />}
+        </SettingRow>
+      ))}
+      <SaveBar dirty={dirty} saving={saving} savedAt={savedAt} onSave={save} onReset={() => { setDraft(value); setErr(""); }} />
+    </Card>
+  );
+}
+
+function DomainsSection({ value, onSaved }: { value: string[]; onSaved: () => void }) {
+  const [draft, setDraft] = useState<string[]>(value);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [savedAt, setSavedAt] = useState("");
+  useEffect(() => { setDraft(value); }, [value]);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(value);
+  async function save() {
+    setSaving(true); setErr("");
+    try {
+      await api.put("/admin/settings/url_fetch_allowed_domains", draft);
+      setSavedAt(new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }));
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setSaving(false); }
+  }
+  return (
+    <Card title="Allowed websites for URL sources">
+      <p className="-mt-1 mb-4 text-sm text-muted">The Knowledge Hub fetches web pages only from these domains and their sub-domains.</p>
+      {err && <Alert tone="error">{err}</Alert>}
+      <TagInput values={draft} onChange={setDraft} placeholder="e.g. docs.motadata.com"
+        validate={(v) => /^(?!-)[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(v) ? null : "Enter a domain name such as docs.motadata.com, without https://"} />
+      <SaveBar dirty={dirty} saving={saving} savedAt={savedAt} onSave={save} onReset={() => { setDraft(value); setErr(""); }} />
+    </Card>
   );
 }
 

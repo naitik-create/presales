@@ -48,6 +48,14 @@ body {
   outline-offset: 2px;
 }
 
+/* Horizontal tab strips scroll on small screens without showing a scrollbar */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .modal-overlay {
   background: rgb(23 23 23 / 0.5); /* monochrome-900 at 50% */
 }
