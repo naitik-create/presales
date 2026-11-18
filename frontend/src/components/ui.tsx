@@ -187,6 +187,43 @@ export function Progress({ value }: { value: number }) {
   );
 }
 
+/** Compact segmented control for sub-pages within a section. */
+export function Segmented({ items, active, onChange }: { items: { key: string; label: string; count?: number }[]; active: string; onChange: (k: string) => void }) {
+  return (
+    <div role="tablist" className="inline-flex rounded border border-border bg-offwhite p-1">
+      {items.map((i) => (
+        <button key={i.key} role="tab" aria-selected={active === i.key} onClick={() => onChange(i.key)}
+          className={cx("rounded-sm px-4 py-1 text-sm font-semibold transition-colors",
+            active === i.key ? "bg-white text-black shadow-sm" : "text-mono-600 hover:text-black")}>
+          {i.label}{i.count !== undefined && <span className="ml-2 text-muted">{i.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Slide-over panel from the right, for editing one item without leaving the list. */
+export function Drawer({ open, title, subtitle, onClose, children, footer }: { open: boolean; title: string; subtitle?: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    if (open) window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <div className="modal-overlay fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      <aside role="dialog" aria-modal aria-label={title} className="flex h-full w-full max-w-lg flex-col border-l border-border bg-white" onClick={(e) => e.stopPropagation()}>
+        <header className="flex items-start justify-between gap-4 border-b border-lightborder px-6 py-4">
+          <div><h2 className="text-h5">{title}</h2>{subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}</div>
+          <button aria-label="Close" onClick={onClose} className="rounded p-1 hover:bg-offwhite"><X size={20} /></button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-6 py-4">{children}</div>
+        {footer && <footer className="flex justify-end gap-2 border-t border-lightborder px-6 py-4">{footer}</footer>}
+      </aside>
+    </div>
+  );
+}
+
 /** On/off switch for boolean settings. */
 export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (

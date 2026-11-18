@@ -49,7 +49,8 @@ const config: Config = {
     borderRadius: { none: "0", sm: "4px", DEFAULT: "8px", lg: "12px", full: "9999px" },
     extend: {
       width: { sidebar: "256px", "sidebar-collapsed": "64px", 12: "48px", 24: "96px", 32: "128px", 40: "160px", 56: "224px", 96: "384px" },
-      maxWidth: { sm: "384px", content: "1440px", prose: "768px" },
+      maxWidth: { sm: "384px", lg: "512px", content: "1440px", prose: "768px" },
+      boxShadow: { sm: "0 1px 2px rgb(0 0 0 / 0.08)" },
     },
   },
   plugins: [],

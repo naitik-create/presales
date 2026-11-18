@@ -1,8 +1,9 @@
 "use client";
-import { Activity, Bot, Briefcase, ClipboardList, Image as ImageIcon, KeyRound, Plus, Search, Settings2, ShieldCheck, Users as UsersIcon, Wallet } from "lucide-react";
+import { Activity, Bot, Briefcase, ChevronRight, ClipboardList, Image as ImageIcon, KeyRound, Plus, Search, Settings2, ShieldCheck, Users as UsersIcon, Wallet } from "lucide-react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, Card, cx, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, Card, cx, Drawer, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Segmented, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
 import { api, fmtDate, money } from "@/lib/api";
 import { refreshBranding, useBranding } from "@/lib/branding";
 import { useApi } from "@/lib/hooks";
@@ -35,9 +36,9 @@ function AdminHome() {
   const params = useSearchParams();
   const groups = GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => can(i.perm)) })).filter((g) => g.items.length);
   const flat = groups.flatMap((g) => g.items);
-  const [tab, setTab] = useState(params.get("tab") || flat[0]?.key || "users");
+  const tab = params.get("tab") || flat[0]?.key || "users";  // the URL is the source of truth, so links can switch sections
   const current = flat.find((s) => s.key === tab) || flat[0];
-  const go = (k: string) => { setTab(k); router.replace(`/admin?tab=${k}`, { scroll: false }); };
+  const go = (k: string) => router.replace(`/admin?tab=${k}`, { scroll: false });
   if (!current) return <><PageHeader title="Administration" /><Alert tone="info">You have no administration permissions.</Alert></>;
   return (
     <>
@@ -314,177 +315,254 @@ function AI() {
   const models = useApi<any[]>("/admin/ai/models");
   const emb = useApi<any>("/admin/ai/embedding");
   const keys = useApi<any[]>("/admin/api-keys");
+  const [view, setView] = useState<"agents" | "models" | "embeddings">("agents");
   const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
   const [configure, setConfigure] = useState<any | null>(null);
   const [modelEdit, setModelEdit] = useState<any | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkModel, setBulkModel] = useState("");
+  const [saving, setSaving] = useState(false);
   if (!agents.data || !models.data || !emb.data) return <Spinner />;
+
   const label = (id: string) => models.data!.find((m) => m.model_id === id)?.label || id;
   const providerOf = (id: string) => models.data!.find((m) => m.model_id === id)?.provider || "anthropic";
   const hasKey = (p: string) => !keys.data || keys.data.some((k) => k.provider === p && k.source !== "none");
   const modelOpts = models.data.filter((m) => m.active).map((m) => ({
-    value: m.model_id, label: `${m.label} · ${PROVIDER_LABELS[m.provider] || m.provider}${hasKey(m.provider) ? "" : " (no key)"}`,
+    value: m.model_id, label: `${m.label} (${PROVIDER_LABELS[m.provider] || m.provider})${hasKey(m.provider) ? "" : " – no key"}`,
   }));
   const active = emb.data.configurations.find((c: any) => c.is_active);
   const byModule: Record<string, any[]> = {};
   agents.data.forEach((a) => { (byModule[a.module] ||= []).push(a); });
+  const enabledCount = agents.data.filter((a) => a.enabled).length;
 
-  const patch = async (key: string, body: any, ok = "Agent updated") => {
-    try { await api.patch(`/admin/ai/agents/${key}`, body); agents.reload(); setMsg({ tone: "success", text: ok }); }
-    catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+  // One banner for every provider that enabled agents depend on but has no key
+  const missing = Object.entries(agents.data.filter((a) => a.enabled).reduce((acc: Record<string, number>, a) => {
+    const p = providerOf(a.model_id);
+    if (!hasKey(p)) acc[p] = (acc[p] || 0) + 1;
+    return acc;
+  }, {}));
+
+  const patch = async (key: string, body: any, ok: string) => {
+    try { await api.patch(`/admin/ai/agents/${key}`, body); agents.reload(); setMsg({ tone: "success", text: ok }); return true; }
+    catch (e) { setMsg({ tone: "error", text: (e as Error).message }); return false; }
   };
   async function applyAll() {
-    if (!bulkModel || !confirm(`Use ${label(bulkModel)} for all ${agents.data!.length} agents?`)) return;
+    setSaving(true);
     try {
       for (const a of agents.data!) await api.patch(`/admin/ai/agents/${a.agent_key}`, { model_id: bulkModel });
-      agents.reload(); setMsg({ tone: "success", text: `All agents now use ${label(bulkModel)}.` });
-    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+      agents.reload(); setBulkOpen(false); setMsg({ tone: "success", text: `All agents now use ${label(bulkModel)}.` });
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setSaving(false); }
+  }
+  async function saveAgent() {
+    setSaving(true);
+    const { model_id, effort, max_output_tokens, timeout_seconds, max_retries } = configure;
+    if (await patch(configure.agent_key, { model_id, effort, max_output_tokens, timeout_seconds, max_retries }, `${configure.label} saved.`)) setConfigure(null);
+    setSaving(false);
   }
   async function saveModel() {
+    setSaving(true);
     try {
       await api.put("/admin/ai/models", { ...modelEdit, input_per_mtok: Number(modelEdit.input_per_mtok || 0), output_per_mtok: Number(modelEdit.output_per_mtok || 0) });
       setModelEdit(null); models.reload(); setMsg({ tone: "success", text: "Model saved." });
-    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setSaving(false); }
   }
 
   return (
     <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <Segmented active={view} onChange={(k) => setView(k as any)} items={[
+          { key: "agents", label: "Agents", count: agents.data.length },
+          { key: "models", label: "Models", count: models.data.length },
+          { key: "embeddings", label: "Embeddings" },
+        ]} />
+        {view === "agents" && <Button onClick={() => { setBulkModel(""); setBulkOpen(true); }}>Change model for all agents</Button>}
+        {view === "models" && <Button variant="primary" onClick={() => setModelEdit({ model_id: "", label: "", provider: "openai", endpoint: "", input_per_mtok: "", output_per_mtok: "", active: true, isNew: true })}><Plus size={16} /> Add model</Button>}
+      </div>
+
+      {missing.map(([p, n]) => (
+        <div key={p} className="flex flex-wrap items-center justify-between gap-4 rounded border border-warning bg-white px-4 py-3">
+          <div className="flex items-start gap-3">
+            <KeyRound size={20} className="mt-1 text-warning" />
+            <div>
+              <div className="text-sm font-semibold">{PROVIDER_LABELS[p] || p} is not connected</div>
+              <div className="text-sm text-muted">{n} {n === 1 ? "agent uses" : "agents use"} this provider, but no API key is saved. These agents will fail until a key is added.</div>
+            </div>
+          </div>
+          <Link href="/admin?tab=keys" className="inline-flex items-center gap-1 rounded border border-border px-4 py-2 text-sm font-semibold hover:bg-offwhite">Add API key <ChevronRight size={16} /></Link>
+        </div>
+      ))}
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
 
-      <Card title="Agents" actions={
-        <div className="flex items-center gap-2">
-          <Select className="w-56" value={bulkModel} onChange={(e) => setBulkModel(e.target.value)} options={[{ value: "", label: "Set one model for all…" }, ...modelOpts]} />
-          <Button disabled={!bulkModel} onClick={applyAll}>Apply</Button>
-        </div>}>
-        <div className="flex flex-col gap-6">
-          {Object.entries(byModule).map(([mod, list]) => (
-            <div key={mod}>
-              <div className="mb-2 text-sm font-semibold uppercase text-mono-600">{MODULE_NAMES[mod] || mod}</div>
-              <ul className="rounded border border-border">
-                {list.map((a) => (
-                  <li key={a.agent_key} className="flex flex-col gap-3 border-b border-lightborder px-4 py-3 last:border-b-0 md:flex-row md:items-center md:justify-between">
-                    <div className="min-w-0">
-                      <div className={cx("font-semibold", !a.enabled && "text-muted")}>{a.label}</div>
-                      <div className="text-sm text-muted">{AGENT_INFO[a.agent_key] || ""}</div>
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        <Chip>{label(a.model_id)}<span className="ml-1 text-muted">· {PROVIDER_LABELS[providerOf(a.model_id)]}</span></Chip>
-                        {providerOf(a.model_id) === "anthropic" && <Chip>{cap(a.effort)} effort</Chip>}
-                        {!hasKey(providerOf(a.model_id)) && <Badge tone="error">No {PROVIDER_LABELS[providerOf(a.model_id)]} key</Badge>}
-                        <Chip muted>{ktok(a.max_output_tokens)} output tokens</Chip>
-                        <Chip muted>{a.timeout_seconds}s timeout</Chip>
-                        <Chip muted>{a.max_retries} {a.max_retries === 1 ? "retry" : "retries"}</Chip>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-4">
-                      <span className="flex items-center gap-2 text-sm text-muted">{a.enabled ? "On" : "Off"}
-                        <Toggle label={`${a.label} enabled`} checked={a.enabled} onChange={(v) => patch(a.agent_key, { enabled: v }, v ? `${a.label} enabled` : `${a.label} disabled`)} /></span>
-                      <Button onClick={() => setConfigure({ ...a })}>Configure</Button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      </Card>
-
-      <Card title="Models and prices" actions={<Button onClick={() => setModelEdit({ model_id: "", label: "", provider: "openai", endpoint: "", input_per_mtok: "", output_per_mtok: "", active: true, isNew: true })}><Plus size={16} /> Add model</Button>}>
-        <p className="-mt-1 mb-4 text-sm text-muted">Add models from Anthropic, OpenAI, Google Gemini or Azure OpenAI, then choose them for any agent. Each provider needs its key in API keys. Prices are per million tokens and are used only to estimate cost.</p>
-        <Table head={["Model", "Provider", "Input price", "Output price", "Agents using it", "Available", ""]}>
-          {models.data.map((m) => (
-            <tr key={m.model_id}>
-              <td><div className="font-semibold">{m.label}</div><div className="text-sm text-muted">{m.model_id}</div></td>
-              <td className="whitespace-nowrap">{PROVIDER_LABELS[m.provider] || m.provider}{!hasKey(m.provider) && <div><Badge tone="error">No key</Badge></div>}</td>
-              <td>{money(Number(m.input_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
-              <td>{money(Number(m.output_per_mtok))}<span className="text-sm text-muted"> / 1M</span></td>
-              <td>{agents.data!.filter((a) => a.model_id === m.model_id).length}</td>
-              <td><Toggle label={`${m.label} available`} checked={m.active} onChange={(v) => api.put("/admin/ai/models", { ...m, active: v }).then(models.reload)} /></td>
-              <td className="text-right"><Button variant="ghost" onClick={() => setModelEdit({ ...m })}>Edit</Button></td>
-            </tr>
-          ))}
-        </Table>
-      </Card>
-
-      <Card title="Embedding model">
-        <p className="-mt-1 mb-4 text-sm text-muted">Turns Knowledge Hub documents into vectors for search. Vectors from different models are not compatible, so switching runs a full re-index in the background; search keeps using the current index until it finishes.</p>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {Object.entries(emb.data.options).map(([k, o]: any) => {
-            const isActive = active?.provider === k;
-            return (
-              <div key={k} className={cx("rounded border p-4", isActive ? "border-black" : "border-border")}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="font-semibold">{k === "local" ? "Local model (on this server)" : "External service (Voyage AI)"}</div>
-                  {isActive ? <Badge tone="success">Active</Badge> : null}
-                </div>
-                <div className="mt-1 text-sm text-muted">{o.model_name} · {o.dimension} dimensions</div>
-                <div className="mt-1 text-sm text-muted">{k === "local" ? "Document text never leaves the server. No extra account needed." : "Needs a Voyage AI key in API keys. Document text is sent to Voyage AI."}</div>
-                {!isActive && <div className="mt-4"><Button onClick={() => confirm(`Switch to ${o.model_name} and re-index every document?`) &&
-                  api.post("/admin/ai/embedding/switch", { provider: k, confirm: true }).then(emb.reload).catch((e) => setMsg({ tone: "error", text: e.message }))}>Switch and re-index</Button></div>}
-              </div>
-            );
-          })}
-        </div>
-        {emb.data.reindex_job && ["Queued", "Processing"].includes(emb.data.reindex_job.status) && (
-          <div className="mt-4 text-sm">Re-index in progress: {emb.data.reindex_job.message}<Progress value={emb.data.reindex_job.progress} /></div>
-        )}
-      </Card>
-
-      <Modal open={!!configure} title={configure ? `Configure: ${configure.label}` : ""} onClose={() => setConfigure(null)}>
-        {configure && <div className="flex flex-col gap-2">
-          <p className="text-sm text-muted">{AGENT_INFO[configure.agent_key]}</p>
-          <SettingRow title="Model" help="The model this agent calls. Models from any provider in the model list can be chosen.">
-            <Select className="w-56" value={configure.model_id} onChange={(e) => setConfigure({ ...configure, model_id: e.target.value })}
-              options={modelOpts.some((m) => m.value === configure.model_id) ? modelOpts : [{ value: configure.model_id, label: configure.model_id }, ...modelOpts]} />
-          </SettingRow>
-          {!hasKey(providerOf(configure.model_id)) && <Alert tone="warning">No {PROVIDER_LABELS[providerOf(configure.model_id)]} key is saved. Add it in API keys first, or this agent will fail.</Alert>}
-          {providerOf(configure.model_id) === "anthropic" ? (
-            <SettingRow title="Effort" help={EFFORT_INFO[configure.effort]}>
-              <Select className="w-40" value={configure.effort} onChange={(e) => setConfigure({ ...configure, effort: e.target.value })}
-                options={Object.keys(EFFORT_INFO).map((k) => ({ value: k, label: cap(k) }))} />
-            </SettingRow>
-          ) : <p className="py-2 text-sm text-muted">Effort applies to Claude models only and is not used for {PROVIDER_LABELS[providerOf(configure.model_id)]}.</p>}
-          <SettingRow title="Maximum output" help="Longest answer the agent may write. Raise it if long outputs are cut off.">
-            <NumberInput value={configure.max_output_tokens} unit="tokens" min={256} max={128000} step={1000} onChange={(v) => setConfigure({ ...configure, max_output_tokens: v })} />
-          </SettingRow>
-          <SettingRow title="Time limit" help="A call that takes longer is stopped and retried.">
-            <NumberInput value={configure.timeout_seconds} unit="seconds" min={10} max={3600} onChange={(v) => setConfigure({ ...configure, timeout_seconds: v })} />
-          </SettingRow>
-          <SettingRow title="Retries" help="Retries after a temporary error such as a rate limit.">
-            <NumberInput value={configure.max_retries} unit="retries" min={0} max={5} onChange={(v) => setConfigure({ ...configure, max_retries: v })} />
-          </SettingRow>
-          <div className="flex justify-end gap-2 border-t border-lightborder pt-4">
-            <Button variant="ghost" onClick={() => setConfigure(null)}>Cancel</Button>
-            <Button variant="primary" onClick={async () => {
-              const { model_id, effort, max_output_tokens, timeout_seconds, max_retries } = configure;
-              await patch(configure.agent_key, { model_id, effort, max_output_tokens, timeout_seconds, max_retries }, `${configure.label} saved`);
-              setConfigure(null);
-            }}>Save</Button>
+      {view === "agents" && (
+        <div className="overflow-x-auto rounded border border-border">
+          <div className="flex items-center justify-between border-b border-border bg-offwhite px-4 py-3 text-sm text-muted">
+            <span>{enabledCount} of {agents.data.length} agents on</span>
+            <span>Select a row to change its model and limits</span>
           </div>
-        </div>}
-      </Modal>
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-mono-600">
+                <th className="px-4 py-2 font-semibold">Agent</th>
+                <th className="px-4 py-2 font-semibold">Model</th>
+                <th className="px-4 py-2 font-semibold">Effort</th>
+                <th className="px-4 py-2 font-semibold">Output limit</th>
+                <th className="px-4 py-2 font-semibold">Status</th>
+                <th className="w-12 px-4 py-2"><span className="sr-only">Edit</span></th>
+              </tr>
+            </thead>
+            {Object.entries(byModule).map(([mod, list]) => (
+              <tbody key={mod}>
+                <tr><td colSpan={6} className="bg-white px-4 pb-1 pt-4 text-sm font-semibold uppercase text-mono-600">{MODULE_NAMES[mod] || mod}</td></tr>
+                {list.map((a) => {
+                  const p = providerOf(a.model_id);
+                  return (
+                    <tr key={a.agent_key} onClick={() => setConfigure({ ...a })} className="cursor-pointer border-t border-lightborder hover:bg-offwhite">
+                      <td className="px-4 py-3">
+                        <div className={cx("font-semibold", !a.enabled && "text-muted")}>{a.label}</div>
+                        <div className="text-sm text-muted">{AGENT_INFO[a.agent_key] || ""}</div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <div>{label(a.model_id)}</div>
+                        <div className={cx("text-sm", hasKey(p) ? "text-muted" : "text-error")}>{PROVIDER_LABELS[p]}{hasKey(p) ? "" : " · no key"}</div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">{p === "anthropic" ? cap(a.effort) : <span className="text-muted">Not used</span>}</td>
+                      <td className="whitespace-nowrap px-4 py-3">{ktok(a.max_output_tokens)} tokens</td>
+                      <td className="whitespace-nowrap px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <span className="flex items-center gap-2">
+                          <Toggle label={`${a.label} enabled`} checked={a.enabled} onChange={(v) => patch(a.agent_key, { enabled: v }, `${a.label} turned ${v ? "on" : "off"}.`)} />
+                          <span className={a.enabled ? "" : "text-muted"}>{a.enabled ? "On" : "Off"}</span>
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right text-muted"><ChevronRight size={20} /></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            ))}
+          </table>
+        </div>
+      )}
 
-      <Modal open={!!modelEdit} title={modelEdit?.isNew ? "Add model" : `Edit ${modelEdit?.label}`} onClose={() => setModelEdit(null)}>
+      {view === "models" && (
+        <>
+          <p className="max-w-prose text-sm text-muted">Models from Anthropic, OpenAI, Google Gemini and Azure OpenAI can be added here and then chosen for any agent. Each provider needs its key in API keys. Prices are per million tokens and are only used to estimate cost.</p>
+          <Table head={["Model", "Provider", "Input / 1M tokens", "Output / 1M tokens", "Used by", "Available", ""]}>
+            {models.data.map((m) => {
+              const used = agents.data!.filter((a) => a.model_id === m.model_id).length;
+              return (
+                <tr key={m.model_id}>
+                  <td><div className="font-semibold">{m.label}</div><div className="text-sm text-muted">{m.model_id}</div></td>
+                  <td className="whitespace-nowrap">{PROVIDER_LABELS[m.provider] || m.provider}<div className={cx("text-sm", hasKey(m.provider) ? "text-success" : "text-error")}>{hasKey(m.provider) ? "Key saved" : "No key"}</div></td>
+                  <td>{money(Number(m.input_per_mtok))}</td>
+                  <td>{money(Number(m.output_per_mtok))}</td>
+                  <td className="whitespace-nowrap">{used ? `${used} ${used === 1 ? "agent" : "agents"}` : <span className="text-muted">None</span>}</td>
+                  <td><Toggle label={`${m.label} available`} checked={m.active} onChange={(v) => api.put("/admin/ai/models", { ...m, active: v }).then(models.reload)} /></td>
+                  <td className="text-right"><Button variant="ghost" onClick={() => setModelEdit({ ...m })}>Edit</Button></td>
+                </tr>
+              );
+            })}
+          </Table>
+        </>
+      )}
+
+      {view === "embeddings" && (
+        <>
+          <p className="max-w-prose text-sm text-muted">The embedding model turns Knowledge Hub documents into vectors for search. Vectors from different models cannot be mixed, so switching re-indexes every document in the background. Search keeps using the current index until the re-index finishes.</p>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {Object.entries(emb.data.options).map(([k, o]: any) => {
+              const isActive = active?.provider === k;
+              return (
+                <div key={k} className={cx("flex flex-col gap-3 rounded border p-6", isActive ? "border-black" : "border-border")}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-h6">{k === "local" ? "Local model" : "Voyage AI"}</h3>
+                      <p className="text-sm text-muted">{k === "local" ? "Runs on this server" : "External service"}</p>
+                    </div>
+                    {isActive ? <Badge tone="success">In use</Badge> : null}
+                  </div>
+                  <dl className="grid grid-cols-2 gap-2 rounded bg-offwhite p-3 text-sm">
+                    <div><dt className="text-muted">Model</dt><dd className="font-semibold">{o.model_name}</dd></div>
+                    <div><dt className="text-muted">Dimensions</dt><dd className="font-semibold">{o.dimension}</dd></div>
+                  </dl>
+                  <p className="text-sm text-muted">{k === "local" ? "Document text never leaves the server and no extra account is needed." : "Needs a Voyage AI key in API keys. Document text is sent to Voyage AI for embedding."}</p>
+                  {!isActive && <div><Button onClick={() => confirm(`Switch to ${o.model_name} and re-index every document?`) &&
+                    api.post("/admin/ai/embedding/switch", { provider: k, confirm: true }).then(emb.reload).catch((e) => setMsg({ tone: "error", text: e.message }))}>Switch and re-index</Button></div>}
+                </div>
+              );
+            })}
+          </div>
+          {emb.data.reindex_job && ["Queued", "Processing"].includes(emb.data.reindex_job.status) && (
+            <div className="text-sm">Re-index in progress: {emb.data.reindex_job.message}<Progress value={emb.data.reindex_job.progress} /></div>
+          )}
+        </>
+      )}
+
+      <Drawer open={!!configure} title={configure?.label || ""} subtitle={configure ? AGENT_INFO[configure.agent_key] : ""} onClose={() => setConfigure(null)}
+        footer={<><Button variant="ghost" onClick={() => setConfigure(null)}>Cancel</Button><Button variant="primary" loading={saving} onClick={saveAgent}>Save changes</Button></>}>
+        {configure && <div className="flex flex-col gap-6">
+          <section className="flex flex-col gap-3">
+            <h3 className="text-h6">Model</h3>
+            <Field label="Model" hint="Any available model from the Models list can be used.">
+              <Select value={configure.model_id} onChange={(e) => setConfigure({ ...configure, model_id: e.target.value })}
+                options={modelOpts.some((m) => m.value === configure.model_id) ? modelOpts : [{ value: configure.model_id, label: configure.model_id }, ...modelOpts]} />
+            </Field>
+            {!hasKey(providerOf(configure.model_id)) && <Alert tone="warning">No {PROVIDER_LABELS[providerOf(configure.model_id)]} key is saved. Add it in API keys, or this agent will fail.</Alert>}
+            {providerOf(configure.model_id) === "anthropic" ? (
+              <Field label="Effort" hint={EFFORT_INFO[configure.effort]}>
+                <Select value={configure.effort} onChange={(e) => setConfigure({ ...configure, effort: e.target.value })}
+                  options={Object.keys(EFFORT_INFO).map((k) => ({ value: k, label: cap(k) }))} />
+              </Field>
+            ) : <p className="text-sm text-muted">Effort applies to Claude models only.</p>}
+          </section>
+          <section className="flex flex-col gap-1">
+            <h3 className="text-h6">Limits</h3>
+            <SettingRow title="Maximum output" help="Raise it if long answers are cut off.">
+              <NumberInput value={configure.max_output_tokens} unit="tokens" min={256} max={128000} step={1000} onChange={(v) => setConfigure({ ...configure, max_output_tokens: v })} />
+            </SettingRow>
+            <SettingRow title="Time limit" help="Slower calls are stopped and retried.">
+              <NumberInput value={configure.timeout_seconds} unit="sec" min={10} max={3600} onChange={(v) => setConfigure({ ...configure, timeout_seconds: v })} />
+            </SettingRow>
+            <SettingRow title="Retries" help="After a temporary error such as a rate limit.">
+              <NumberInput value={configure.max_retries} min={0} max={5} onChange={(v) => setConfigure({ ...configure, max_retries: v })} />
+            </SettingRow>
+          </section>
+        </div>}
+      </Drawer>
+
+      <Drawer open={!!modelEdit} title={modelEdit?.isNew ? "Add model" : modelEdit?.label || ""} subtitle={modelEdit?.isNew ? "Make a model from any supported provider available to agents." : modelEdit?.model_id}
+        onClose={() => setModelEdit(null)}
+        footer={<><Button variant="ghost" onClick={() => setModelEdit(null)}>Cancel</Button>
+          <Button variant="primary" loading={saving} disabled={!modelEdit?.model_id || !modelEdit?.label} onClick={saveModel}>Save model</Button></>}>
         {modelEdit && <div className="flex flex-col gap-4">
           <Field label="Provider"><Select value={modelEdit.provider || "anthropic"} disabled={!modelEdit.isNew}
             onChange={(e) => setModelEdit({ ...modelEdit, provider: e.target.value })}
             options={Object.entries(PROVIDER_LABELS).map(([value, l]) => ({ value, label: l }))} /></Field>
           {!hasKey(modelEdit.provider || "anthropic") && <Alert tone="warning">No {PROVIDER_LABELS[modelEdit.provider || "anthropic"]} key is saved yet. Add it in API keys.</Alert>}
-          <Field label={modelEdit.provider === "azure_openai" ? "Deployment name" : "Model ID"} hint={`Exactly as the provider names it: ${MODEL_ID_HINTS[modelEdit.provider || "anthropic"]}`}>
+          <Field label={modelEdit.provider === "azure_openai" ? "Deployment name" : "Model ID"} hint={`Exactly as the provider names it: ${MODEL_ID_HINTS[modelEdit.provider || "anthropic"]}.`}>
             <Input value={modelEdit.model_id} disabled={!modelEdit.isNew} onChange={(e) => setModelEdit({ ...modelEdit, model_id: e.target.value })} /></Field>
-          {modelEdit.provider === "azure_openai" && <Field label="Resource endpoint" hint="e.g. https://myresource.openai.azure.com">
+          {modelEdit.provider === "azure_openai" && <Field label="Resource endpoint" hint="For example https://myresource.openai.azure.com">
             <Input value={modelEdit.endpoint || ""} onChange={(e) => setModelEdit({ ...modelEdit, endpoint: e.target.value })} /></Field>}
-          <Field label="Display name"><Input value={modelEdit.label} onChange={(e) => setModelEdit({ ...modelEdit, label: e.target.value })} /></Field>
+          <Field label="Display name" hint="Shown to administrators when choosing a model."><Input value={modelEdit.label} onChange={(e) => setModelEdit({ ...modelEdit, label: e.target.value })} /></Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Input price (USD per 1M tokens)"><Input type="number" step="any" value={modelEdit.input_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, input_per_mtok: e.target.value })} /></Field>
-            <Field label="Output price (USD per 1M tokens)"><Input type="number" step="any" value={modelEdit.output_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, output_per_mtok: e.target.value })} /></Field>
+            <Field label="Input price" hint="USD per 1M tokens"><Input type="number" step="any" value={modelEdit.input_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, input_per_mtok: e.target.value })} /></Field>
+            <Field label="Output price" hint="USD per 1M tokens"><Input type="number" step="any" value={modelEdit.output_per_mtok} onChange={(e) => setModelEdit({ ...modelEdit, output_per_mtok: e.target.value })} /></Field>
           </div>
-          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setModelEdit(null)}>Cancel</Button>
-            <Button variant="primary" disabled={!modelEdit.model_id || !modelEdit.label} onClick={saveModel}>Save model</Button></div>
         </div>}
+      </Drawer>
+
+      <Modal open={bulkOpen} title="Change model for all agents" onClose={() => setBulkOpen(false)}>
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-muted">Every agent ({agents.data.length}) will use the selected model. Effort and limits stay as they are.</p>
+          <Field label="Model"><Select value={bulkModel} onChange={(e) => setBulkModel(e.target.value)} options={[{ value: "", label: "Select a model" }, ...modelOpts]} /></Field>
+          {bulkModel && !hasKey(providerOf(bulkModel)) && <Alert tone="warning">No {PROVIDER_LABELS[providerOf(bulkModel)]} key is saved.</Alert>}
+          <div className="flex justify-end gap-2"><Button variant="ghost" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button variant="primary" disabled={!bulkModel} loading={saving} onClick={applyAll}>Apply to all agents</Button></div>
+        </div>
       </Modal>
     </div>
   );
 }
+
 
 function keyStatus(k: any): { tone: "success" | "warning" | "error" | "neutral" | "info"; text: string } {
   if (k.source === "none") return { tone: "neutral", text: "Not configured" };

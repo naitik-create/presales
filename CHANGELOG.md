@@ -27,6 +27,9 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   storage location and test date; other providers in a compact list.
 - Roles: cards showing the areas each role covers, permission and user counts.
 - Tables use a light header row instead of solid black.
+- AI models page rebuilt: Agents / Models / Embeddings sub-pages; agents in one compact table grouped by module;
+  a single "provider not connected" banner with a link to API keys instead of a warning on every agent; editing in a
+  side panel; "Change model for all agents" dialog.
 
 ## 1.0.0 — 2026-11-18
 
