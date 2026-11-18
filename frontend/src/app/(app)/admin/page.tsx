@@ -299,13 +299,13 @@ function Roles() {
       <aside className="flex flex-col gap-1">
         <div className="mb-1 flex items-center justify-between px-2">
           <span className="text-sm text-muted">{roles.data.length} roles</span>
-          <Button variant="ghost" onClick={() => newRole()}><Plus size={14} /> New</Button>
+          <Button variant="primary" onClick={() => newRole()}><Plus size={14} /> New role</Button>
         </div>
         {roles.data.map((r) => (
           <button key={r.id} onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) pick(r); }}
             className={cx("flex w-full flex-col rounded px-2 py-2 text-left", selected === r.id ? "bg-mono-100" : "hover:bg-offwhite")}>
             <span className={cx("text-sm", selected === r.id && "font-semibold")}>{r.name}</span>
-            <span className="text-sm text-muted">{r.permissions.length} permissions · {r.user_count ?? 0} {r.user_count === 1 ? "user" : "users"}{r.is_system ? "" : " · custom"}</span>
+            <span className="text-sm text-muted">{r.permissions.length} {r.permissions.length === 1 ? "permission" : "permissions"} · {r.user_count ?? 0} {r.user_count === 1 ? "user" : "users"}{r.is_system ? "" : " · custom"}</span>
           </button>
         ))}
         {selected === "new" && (
@@ -322,8 +322,8 @@ function Roles() {
               <Field label="Description"><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this role is for" /></Field>
             </div>
             <div className="flex gap-1 pt-6">
-              {typeof selected === "number" && <Button variant="ghost" onClick={() => newRole(original)}>Duplicate</Button>}
-              {original && !original.is_system && <Button variant="ghost" onClick={remove}>Delete</Button>}
+              {typeof selected === "number" && <Button variant="secondary" onClick={() => newRole(original)}>Duplicate</Button>}
+              {original && !original.is_system && <Button variant="danger" onClick={remove}>Delete</Button>}
             </div>
           </div>
           {draft.is_system && <p className="mt-2 text-sm text-muted">Built-in role: the name is fixed, permissions can be changed.</p>}

@@ -11,7 +11,7 @@ export function cx(...c: (string | false | null | undefined)[]) {
  * Buttons share one recognisable shape (a pill) so they never look like fields, which are square-cornered.
  * primary   – the one main action on a screen: Motadata accent fill, black text (5.86:1), turns black on hover
  * secondary – other actions: black outline, fills black on hover
- * ghost     – low-emphasis actions in lists and toolbars: text only, grey pill on hover
+ * ghost     – low-emphasis actions in lists and toolbars: light grey pill, darker on hover
  * danger    – destructive actions: error-colour outline (never the accent)
  */
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -19,7 +19,7 @@ const BUTTON_BASE = "inline-flex h-8 items-center justify-center gap-2 whitespac
 const BUTTON_STYLES: Record<ButtonVariant, string> = {
   primary: "border-accent bg-accent text-black hover:border-black hover:bg-black hover:text-white disabled:hover:border-accent disabled:hover:bg-accent disabled:hover:text-black",
   secondary: "border-black bg-white text-black hover:bg-black hover:text-white disabled:hover:bg-white disabled:hover:text-black",
-  ghost: "border-transparent bg-transparent px-3 text-black hover:bg-mono-100 disabled:hover:bg-transparent",
+  ghost: "border-mono-100 bg-mono-100 px-3 text-black hover:border-mono-300 hover:bg-mono-300 disabled:hover:border-mono-100 disabled:hover:bg-mono-100",
   danger: "border-error bg-white text-error hover:bg-error hover:text-white disabled:hover:bg-white disabled:hover:text-error",
 };
 

@@ -98,8 +98,8 @@ function Submitted() {
               <td className="font-semibold">{r.customer}<div className="text-sm text-muted">{r.title}</div></td><td>{r.industry}</td>
               <td>{fmtDate(r.submitted_on)}</td><td>{r.product_version}</td><td>{r.pairs}</td>
               <td>{r.held_back_for_testing ? <Badge tone="warning">Held back</Badge> : ""}
-                {can("submitted.manage") && <button className="ml-2 text-sm underline" onClick={() => api.patch(`/knowledge/submitted/${r.id}?held_back_for_testing=${!r.held_back_for_testing}`).then(reload)}>
-                  {r.held_back_for_testing ? "Release" : "Hold back"}</button>}</td>
+                {can("submitted.manage") && <Button variant="ghost" className="ml-2" onClick={() => api.patch(`/knowledge/submitted/${r.id}?held_back_for_testing=${!r.held_back_for_testing}`).then(reload)}>
+                  {r.held_back_for_testing ? "Release" : "Hold back"}</Button>}</td>
               <td><Button variant="ghost" onClick={() => setView(r.id)}>Open</Button></td>
             </tr>
           ))}
