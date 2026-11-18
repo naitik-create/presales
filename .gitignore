@@ -1,0 +1,29 @@
+# Secrets and local config
+.env
+*.env.local
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+.pytest_cache/
+
+# Node
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Runtime data
+backend/storage/
+backend/logs/
+backend/.model_cache/
+backups/
+
+# Source documents kept out of the repo
+*.docx
+!backend/app/templates/*.docx
+
+# Build caches
+frontend/tsconfig.tsbuildinfo
+frontend/next-env.d.ts
