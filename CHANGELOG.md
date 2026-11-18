@@ -13,6 +13,13 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Users: search, initials avatars, role chips, and role assignment with switches.
 - Roles: access shown as "n of N permissions"; the role editor groups permissions by area with All/None and switches.
 - Knowledge Hub sizing rules are edited with a form (input ranges and hardware values) instead of JSON.
+- AI models: agents grouped by module with plain-language descriptions and summary chips, an on/off switch, a
+  Configure dialog (model, effort, output limit, time limit, retries) and "set one model for all agents"; model prices
+  with add/edit dialog; embedding options shown as cards.
+- API keys: provider cards with connection status (Connected, Not tested, Test failed, Not configured), masked key,
+  storage location and test date; other providers in a compact list.
+- Roles: cards showing the areas each role covers, permission and user counts.
+- Tables use a light header row instead of solid black.
 
 ## 1.0.0 — 2026-11-18
 
