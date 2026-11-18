@@ -25,7 +25,10 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   with add/edit dialog; embedding options shown as cards.
 - API keys: provider cards with connection status (Connected, Not tested, Test failed, Not configured), masked key,
   storage location and test date; other providers in a compact list.
-- Roles: cards showing the areas each role covers, permission and user counts.
+- Roles and permissions rebuilt as a two-pane page: role list on the left (permission and user counts), selected role
+  on the right with name and description, collapsible permission groups with a plain description, group checkboxes
+  (all / some / none), a permission filter, a Members tab, Duplicate and Delete, and a save bar with unsaved-change
+  tracking. Built-in roles cannot be renamed.
 - Tables use a light header row instead of solid black.
 - AI models page rebuilt: Agents / Models / Embeddings sub-pages; agents in one compact table grouped by module;
   a single "provider not connected" banner with a link to API keys instead of a warning on every agent; editing in a

@@ -224,6 +224,16 @@ export function Drawer({ open, title, subtitle, onClose, children, footer }: { o
   );
 }
 
+/** Checkbox that can also show a partly-selected state (for "select all" over a group). */
+export function Checkbox({ checked, indeterminate, onChange, label, disabled }: { checked: boolean; indeterminate?: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+  return (
+    <input type="checkbox" aria-label={label} checked={checked} disabled={disabled}
+      ref={(el) => { if (el) el.indeterminate = !!indeterminate && !checked; }}
+      onChange={(e) => onChange(e.target.checked)}
+      className="h-4 w-4 shrink-0 cursor-pointer accent-black disabled:cursor-not-allowed" />
+  );
+}
+
 /** On/off switch for boolean settings. */
 export function Toggle({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return (

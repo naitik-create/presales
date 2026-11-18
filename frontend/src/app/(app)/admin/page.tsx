@@ -3,7 +3,7 @@ import { Activity, Bot, Briefcase, ChevronRight, ClipboardList, Image as ImageIc
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, Card, cx, Drawer, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Segmented, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, Card, Checkbox, cx, Drawer, Field, Input, Modal, NumberInput, PageHeader, Progress, SaveBar, Segmented, Select, SettingRow, Spinner, StatusBadge, Table, TagInput, Textarea, Toggle } from "@/components/ui";
 import { api, fmtDate, money } from "@/lib/api";
 import { refreshBranding, useBranding } from "@/lib/branding";
 import { useApi } from "@/lib/hooks";
@@ -205,108 +205,224 @@ function Chip({ children, muted }: { children: ReactNode; muted?: boolean }) {
   return <span className={cx("inline-flex items-center whitespace-nowrap rounded border px-2 text-sm", muted ? "border-lightborder text-muted" : "border-border bg-offwhite text-mono-800")}>{children}</span>;
 }
 
+const AREA_HELP: Record<string, string> = {
+  "RFP Intelligence": "RFP workspaces, compliance answers, proposals and exports",
+  "Demo Intelligence": "Demo scripts and their exports",
+  "Demo use cases": "The curated use-case library used for demo scripts",
+  "Ask Motadata": "The product question assistant",
+  "Knowledge Hub": "Uploading, approving and reading Knowledge Hub sources",
+  "Submitted RFP repository": "Past RFPs and the answers that were submitted",
+  "Team Scorecard": "The points ledger. Keep this to managers and participants",
+  "Customer context": "Shared customer details used by RFP and demo work",
+  "Administration": "Users, roles, AI settings, keys, budget and audit",
+};
+
+type RoleDraft = { id?: number; name: string; description: string; permissions: string[]; is_system?: boolean; user_count?: number };
+
 function Roles() {
+  const { can } = useSession();
   const roles = useApi<any[]>("/admin/roles");
   const perms = useApi<any[]>("/admin/permissions");
-  const [edit, setEdit] = useState<any | null>(null);
-  const [err, setErr] = useState("");
+  const users = useApi<any[]>(can("admin.users") ? "/admin/users" : null);
+  const [selected, setSelected] = useState<number | "new" | null>(null);
+  const [draft, setDraft] = useState<RoleDraft | null>(null);
+  const [view, setView] = useState<"permissions" | "members">("permissions");
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [filter, setFilter] = useState("");
+  const [msg, setMsg] = useState<{ tone: "error" | "success"; text: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
   const areas = useMemo(() => {
     const a: Record<string, any[]> = {};
     (perms.data || []).forEach((p) => { (a[p.area] ||= []).push(p); });
     return a;
   }, [perms.data]);
   const total = perms.data?.length || 0;
-  async function save() {
-    setErr("");
-    try {
-      const body = { name: edit.name, description: edit.description, permissions: edit.permissions };
-      if (edit.id) await api.put(`/admin/roles/${edit.id}`, body); else await api.post("/admin/roles", body);
-      setEdit(null); roles.reload();
-    } catch (e) { setErr((e as Error).message); }
+  const original = selected === "new" ? null : roles.data?.find((r) => r.id === selected) || null;
+
+  // Select the first role once the list has loaded
+  useEffect(() => {
+    if (roles.data?.length && selected === null) pick(roles.data[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roles.data]);
+
+  function pick(r: any) {
+    setSelected(r.id); setDraft({ ...r, permissions: [...r.permissions] }); setView("permissions"); setMsg(null); setFilter("");
   }
-  const setArea = (list: any[], on: boolean) => {
-    const codes = list.map((p) => p.code);
-    setEdit({ ...edit, permissions: on ? Array.from(new Set([...edit.permissions, ...codes])) : edit.permissions.filter((c: string) => !codes.includes(c)) });
-  };
-  const coverage = (codes: string[]) => Object.entries(areas)
-    .map(([area, list]) => ({ area, n: list.filter((p) => codes.includes(p.code)).length, of: list.length }))
-    .filter((x) => x.n > 0);
+  function newRole(copyFrom?: any) {
+    setSelected("new");
+    setDraft({ name: copyFrom ? `${copyFrom.name} (copy)` : "", description: copyFrom?.description || "", permissions: copyFrom ? [...copyFrom.permissions] : [] });
+    setView("permissions"); setMsg(null);
+  }
+  const dirty = !!draft && (selected === "new" || JSON.stringify({ n: draft.name, d: draft.description, p: [...draft.permissions].sort() })
+    !== JSON.stringify({ n: original?.name, d: original?.description, p: [...(original?.permissions || [])].sort() }));
+
+  async function save() {
+    if (!draft) return;
+    setSaving(true); setMsg(null);
+    try {
+      const body = { name: draft.name.trim(), description: draft.description, permissions: draft.permissions };
+      if (selected === "new") {
+        const r = await api.post("/admin/roles", body);
+        await roles.reload(); setSelected(r.id);
+      } else {
+        await api.put(`/admin/roles/${selected}`, body); await roles.reload();
+      }
+      setMsg({ tone: "success", text: `Role "${body.name}" saved.` });
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setSaving(false); }
+  }
+  async function remove() {
+    if (!original || !confirm(`Delete the role "${original.name}"? Users lose the permissions it grants.`)) return;
+    try { await api.del(`/admin/roles/${original.id}`); setSelected(null); setDraft(null); await roles.reload(); }
+    catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
+  }
+  const setPerms = (codes: string[], on: boolean) => draft && setDraft({
+    ...draft, permissions: on ? Array.from(new Set([...draft.permissions, ...codes])) : draft.permissions.filter((c) => !codes.includes(c)),
+  });
+
+  // keep the draft in step with the saved role after a reload
+  useEffect(() => {
+    if (typeof selected === "number" && roles.data) {
+      const r = roles.data.find((x) => x.id === selected);
+      if (r && !dirty) setDraft({ ...r, permissions: [...r.permissions] });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roles.data]);
+
   if (!roles.data || !perms.data) return <Spinner />;
+  const members = (users.data || []).filter((u) => typeof selected === "number" && u.roles.some((r: any) => r.id === selected));
+  const f = filter.trim().toLowerCase();
+
   return (
-    <>
-      <div className="mb-6 flex items-center justify-between gap-4">
-        <p className="text-sm text-muted">{roles.data.length} roles · {total} permissions available</p>
-        <Button variant="primary" onClick={() => { setErr(""); setEdit({ name: "", description: "", permissions: [] }); }}><Plus size={16} /> New role</Button>
-      </div>
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        {roles.data.map((r) => (
-          <article key={r.id} className="flex flex-col rounded border border-border bg-white">
-            <div className="flex items-start justify-between gap-4 p-4">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[288px_1fr]">
+      {/* role list */}
+      <aside className="flex flex-col gap-3">
+        <Button variant="primary" className="justify-center" onClick={() => newRole()}><Plus size={16} /> New role</Button>
+        <ul className="overflow-hidden rounded border border-border">
+          {roles.data.map((r) => (
+            <li key={r.id}>
+              <button onClick={() => { if (!dirty || confirm("Discard unsaved changes?")) pick(r); }}
+                className={cx("flex w-full flex-col gap-1 border-b border-l-4 border-b-lightborder px-4 py-3 text-left",
+                  selected === r.id ? "border-l-accent bg-offwhite" : "border-l-transparent hover:bg-offwhite")}>
+                <span className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{r.name}</span>
+                  <span className="text-sm text-muted">{r.is_system ? "Built-in" : "Custom"}</span>
+                </span>
+                <span className="text-sm text-muted">{r.permissions.length} permissions · {r.user_count ?? 0} {r.user_count === 1 ? "user" : "users"}</span>
+              </button>
+            </li>
+          ))}
+          {selected === "new" && <li className="border-l-4 border-l-accent bg-offwhite px-4 py-3"><span className="font-semibold">New role</span><div className="text-sm text-muted">Not saved yet</div></li>}
+        </ul>
+      </aside>
+
+      {/* role detail */}
+      {draft && (
+        <section className="flex min-w-0 flex-col rounded border border-border">
+          <header className="flex flex-col gap-4 border-b border-lightborder p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-h6">{r.name}</h3>
-                  <Chip muted>{r.is_system ? "Built-in" : "Custom"}</Chip>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-h4">{draft.name || "New role"}</h3>
+                  {draft.is_system && <Badge>Built-in</Badge>}
                 </div>
-                <p className="mt-1 text-sm text-muted">{r.description || "No description"}</p>
+                <p className="mt-1 text-sm text-muted">{draft.permissions.length} of {total} permissions{typeof selected === "number" && ` · ${original?.user_count ?? 0} ${original?.user_count === 1 ? "user" : "users"}`}</p>
               </div>
-              <div className="flex shrink-0 gap-1">
-                <Button onClick={() => { setErr(""); setEdit(r); }}>Edit</Button>
-                {!r.is_system && <Button variant="ghost" onClick={() => confirm(`Delete the role "${r.name}"?`) && api.del(`/admin/roles/${r.id}`).then(roles.reload)}>Delete</Button>}
+              <div className="flex gap-2">
+                {typeof selected === "number" && <Button onClick={() => newRole(original)}>Duplicate</Button>}
+                {original && !original.is_system && <Button variant="danger" onClick={remove}>Delete</Button>}
               </div>
             </div>
-            <div className="flex flex-wrap gap-1 px-4 pb-4">
-              {coverage(r.permissions).map((c) => (
-                <Chip key={c.area}>{c.area}{c.n < c.of && <span className="ml-1 text-muted">{c.n}/{c.of}</span>}</Chip>
-              ))}
-              {r.permissions.length === 0 && <span className="text-sm text-muted">No permissions</span>}
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <Field label="Name"><Input value={draft.name} disabled={!!draft.is_system} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Bid desk" /></Field>
+              <Field label="Description"><Input value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} placeholder="What this role is for" /></Field>
             </div>
-            <footer className="mt-auto flex gap-6 border-t border-lightborder px-4 py-2 text-sm text-muted">
-              <span><b className="text-black">{r.permissions.length}</b> permissions</span>
-              <span><b className="text-black">{r.user_count ?? 0}</b> {r.user_count === 1 ? "user" : "users"}</span>
-            </footer>
-          </article>
-        ))}
-      </div>
-      <Modal open={!!edit} title={edit?.id ? `Edit role: ${edit.name}` : "New role"} onClose={() => setEdit(null)} wide>
-        {edit && <div className="flex flex-col gap-6">
-          {err && <Alert tone="error">{err}</Alert>}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Field label="Role name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
-            <Field label="Description"><Input value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></Field>
+            {draft.is_system && <p className="text-sm text-muted">Built-in roles cannot be renamed or deleted, but their permissions can be changed.</p>}
+          </header>
+
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-lightborder px-6 py-3">
+            <Segmented active={view} onChange={(k) => setView(k as any)} items={[
+              { key: "permissions", label: "Permissions", count: draft.permissions.length },
+              ...(can("admin.users") && typeof selected === "number" ? [{ key: "members", label: "Members", count: members.length }] : []),
+            ]} />
+            {view === "permissions" && (
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search size={16} className="absolute left-3 top-3 text-muted" />
+                  <Input className="w-56 pl-8" placeholder="Filter permissions" value={filter} onChange={(e) => setFilter(e.target.value)} />
+                </div>
+                <Button variant="ghost" onClick={() => setOpen(Object.fromEntries(Object.keys(areas).map((a) => [a, !Object.values(open).some(Boolean)])))}>
+                  {Object.values(open).some(Boolean) ? "Collapse all" : "Expand all"}
+                </Button>
+              </div>
+            )}
           </div>
-          <div className="text-sm text-muted">{edit.permissions.length} of {total} permissions granted</div>
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-            {Object.entries(areas).map(([area, list]) => {
-              const on = list.filter((p) => edit.permissions.includes(p.code)).length;
-              return (
-                <section key={area} className="rounded border border-border">
-                  <header className="flex items-center justify-between gap-4 border-b border-lightborder bg-offwhite px-4 py-2">
-                    <div><div className="text-sm font-semibold">{area}</div><div className="text-sm text-muted">{on} of {list.length} granted</div></div>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" onClick={() => setArea(list, true)} disabled={on === list.length}>All</Button>
-                      <Button variant="ghost" onClick={() => setArea(list, false)} disabled={on === 0}>None</Button>
+
+          {view === "permissions" && (
+            <ul className="flex-1">
+              {Object.entries(areas).map(([area, list]) => {
+                const shown = f ? list.filter((p) => `${area} ${p.label}`.toLowerCase().includes(f)) : list;
+                if (!shown.length) return null;
+                const codes = list.map((p) => p.code);
+                const on = codes.filter((c) => draft.permissions.includes(c)).length;
+                const isOpen = !!f || !!open[area];
+                return (
+                  <li key={area} className="border-b border-lightborder last:border-b-0">
+                    <div className="flex items-center gap-4 px-6 py-3">
+                      <Checkbox label={`All ${area} permissions`} checked={on === codes.length} indeterminate={on > 0} onChange={(v) => setPerms(codes, v)} />
+                      <button className="flex min-w-0 flex-1 items-center justify-between gap-4 text-left" onClick={() => setOpen({ ...open, [area]: !open[area] })} aria-expanded={isOpen}>
+                        <span className="min-w-0">
+                          <span className="block font-semibold">{area}</span>
+                          <span className="block text-sm text-muted">{AREA_HELP[area] || ""}</span>
+                        </span>
+                        <span className="flex shrink-0 items-center gap-3">
+                          <span className={cx("text-sm", on ? "text-black" : "text-muted")}>{on === codes.length ? "Full access" : on ? `${on} of ${codes.length}` : "No access"}</span>
+                          <ChevronRight size={20} className={cx("text-muted transition-transform", isOpen && "rotate-90")} />
+                        </span>
+                      </button>
                     </div>
-                  </header>
-                  <ul>
-                    {list.map((p) => (
-                      <li key={p.code} className="flex items-center justify-between gap-4 border-b border-lightborder px-4 py-2 last:border-b-0">
-                        <span className="text-sm">{p.label}</span>
-                        <Toggle label={`${area}: ${p.label}`} checked={edit.permissions.includes(p.code)}
-                          onChange={(v) => setEdit({ ...edit, permissions: v ? [...edit.permissions, p.code] : edit.permissions.filter((x: string) => x !== p.code) })} />
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              );
-            })}
-          </div>
-          <div className="flex justify-end gap-2 border-t border-lightborder pt-4">
-            <Button variant="ghost" onClick={() => setEdit(null)}>Cancel</Button>
-            <Button variant="primary" onClick={save} disabled={!edit.name.trim()}>{edit.id ? "Save role" : "Create role"}</Button>
-          </div>
-        </div>}
-      </Modal>
-    </>
+                    {isOpen && (
+                      <div className="grid grid-cols-1 gap-x-8 gap-y-2 bg-offwhite px-6 py-4 pl-16 md:grid-cols-2">
+                        {shown.map((p) => (
+                          <label key={p.code} className="flex cursor-pointer items-center gap-3 text-sm">
+                            <Checkbox label={`${area}: ${p.label}`} checked={draft.permissions.includes(p.code)} onChange={(v) => setPerms([p.code], v)} />
+                            {p.label}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {view === "members" && (
+            <div className="flex-1 p-6">
+              {members.length === 0 ? <p className="text-sm text-muted">No active users have this role. Assign roles from the Users page.</p> : (
+                <ul className="flex flex-col divide-y divide-lightborder">
+                  {members.map((u) => (
+                    <li key={u.id} className="flex items-center gap-3 py-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-mono-100 text-sm font-semibold text-mono-700">{initials(u.full_name)}</span>
+                      <div className="min-w-0 flex-1"><div className="font-semibold">{u.full_name}</div><div className="text-sm text-muted">{u.username}{u.email && ` · ${u.email}`}</div></div>
+                      {!u.is_active && <Badge>Deactivated</Badge>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <Link href="/admin?tab=users" className="mt-4 inline-flex items-center gap-1 text-sm font-semibold underline">Manage users <ChevronRight size={16} /></Link>
+            </div>
+          )}
+
+          <footer className="sticky bottom-0 flex flex-wrap items-center justify-end gap-3 border-t border-lightborder bg-white px-6 py-4">
+            {msg && <span className={cx("mr-auto text-sm", msg.tone === "error" ? "text-error" : "text-success")}>{msg.text}</span>}
+            {!msg && <span className="mr-auto text-sm text-muted">{dirty ? "Unsaved changes" : "All changes saved"}</span>}
+            <Button variant="ghost" disabled={!dirty || saving} onClick={() => selected === "new" ? (roles.data!.length ? pick(roles.data![0]) : setDraft(null)) : original && pick(original)}>Discard</Button>
+            <Button variant="primary" loading={saving} disabled={!dirty || !draft.name.trim()} onClick={save}>{selected === "new" ? "Create role" : "Save changes"}</Button>
+          </footer>
+        </section>
+      )}
+    </div>
   );
 }
 
