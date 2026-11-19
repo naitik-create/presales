@@ -825,63 +825,302 @@ function BrandingTab() {
   );
 }
 
+const PRESETS = [
+  { key: "month", label: "This month" }, { key: "30", label: "Last 30 days" }, { key: "90", label: "Last 90 days" }, { key: "all", label: "All time" },
+];
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+function presetRange(key: string): { start?: string; end?: string } {
+  const now = new Date();
+  if (key === "month") return { start: iso(new Date(now.getFullYear(), now.getMonth(), 1)), end: iso(now) };
+  if (key === "30" || key === "90") return { start: iso(new Date(now.getTime() - (Number(key) - 1) * 86400000)), end: iso(now) };
+  return {};
+}
+const compact = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+const humanize = (k: string) => k ? cap(k.replace(/_/g, " ")) : "System";
+const fmtDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
 function Usage() {
   const { can } = useSession();
-  const [f, setF] = useState({ start: "", end: "", module: "", agent: "", user_id: "" });
-  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]).toString();
+  const [preset, setPreset] = useState("month");
+  const [dims, setDims] = useState({ module: "", agent: "", user_id: "" });
+  const [breakdown, setBreakdown] = useState<"by_agent" | "by_user" | "by_module" | "by_model">("by_agent");
+  const [showAll, setShowAll] = useState(false);
+  const [budgetOpen, setBudgetOpen] = useState(false);
+  const range = presetRange(preset);
+  const qs = new URLSearchParams(Object.entries({ ...range, ...dims }).filter(([, v]) => v) as [string, string][]).toString();
   const { data, reload } = useApi<any>(`/admin/usage?${qs}`, [qs]);
-  const [budget, setBudget] = useState<any>(null);
   if (!data) return <Spinner />;
-  const b = budget || { amount: data.budget.amount ?? "", thresholds: data.budget.thresholds.join(","), hard_stop: data.budget.hard_stop };
+
+  const t = data.totals;
+  const rows: any[] = data[breakdown];
+  const maxCost = Math.max(...rows.map((r) => r.cost), 0);
+  const filtered = Object.values(dims).some(Boolean);
+  const recent = showAll ? data.recent : data.recent.slice(0, 15);
+  const labelFor = (r: any) => breakdown === "by_agent" ? humanize(r.key) : breakdown === "by_module" ? (MODULE_NAMES[r.key] || humanize(r.key)) : (r.key || "System");
+
   return (
-    <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card title={`Budget ${data.budget.month}`}>
-          <div className="text-h3">{money(data.budget.spent)}</div>
-          <div className="text-sm text-muted">{data.budget.amount ? `of ${money(data.budget.amount)} · remaining ${money(data.budget.remaining)}` : "No budget set"}</div>
-          {data.budget.amount && <div className="mt-2"><Progress value={(100 * data.budget.spent) / data.budget.amount} /></div>}
-          <p className="mt-2 text-sm text-muted">Calculated from this application&apos;s own logs, not the Anthropic account balance.</p>
-          {can("admin.budget") && <div className="mt-4 flex flex-col gap-2">
-            <Field label="Monthly budget (USD)"><Input type="number" value={b.amount} onChange={(e) => setBudget({ ...b, amount: e.target.value })} /></Field>
-            <Field label="Alert thresholds (%)"><Input value={b.thresholds} onChange={(e) => setBudget({ ...b, thresholds: e.target.value })} /></Field>
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={b.hard_stop} onChange={(e) => setBudget({ ...b, hard_stop: e.target.checked })} /> Hard stop at 100%</label>
-            <div><Button onClick={() => api.put("/admin/budget", { amount: Number(b.amount), thresholds: String(b.thresholds).split(",").map((x: string) => Number(x.trim())).filter(Boolean), hard_stop: b.hard_stop }).then(() => { setBudget(null); reload(); })}>Save budget</Button></div>
-          </div>}
-        </Card>
-        <Card title="Totals (filtered)" className="lg:col-span-2">
-          <div className="flex flex-wrap gap-8"><Stat label="Calls" v={data.totals.calls} /><Stat label="Input tokens" v={data.totals.input_tokens.toLocaleString()} />
-            <Stat label="Output tokens" v={data.totals.output_tokens.toLocaleString()} /><Stat label="Estimated cost" v={money(data.totals.cost)} /></div>
-          <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
-            <Field label="From"><Input type="date" value={f.start} onChange={(e) => setF({ ...f, start: e.target.value })} /></Field>
-            <Field label="To"><Input type="date" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} /></Field>
-            <Field label="Module"><Select value={f.module} onChange={(e) => setF({ ...f, module: e.target.value })} options={["", "ask", "rfp", "demo", "knowledge"]} /></Field>
-            <Field label="Agent"><Select value={f.agent} onChange={(e) => setF({ ...f, agent: e.target.value })} options={["", ...data.by_agent.map((a: any) => a.key)]} /></Field>
-            <Field label="User"><Select value={f.user_id} onChange={(e) => setF({ ...f, user_id: e.target.value })} options={[{ value: "", label: "" }, ...data.by_user.map((u: any) => ({ value: u.id ?? "", label: u.key || "system" }))]} /></Field>
-          </div>
-        </Card>
+    <div className="flex flex-col gap-8">
+      {/* filters: one row above everything they control */}
+      <div className="flex flex-wrap items-center gap-3">
+        <Segmented items={PRESETS} active={preset} onChange={setPreset} />
+        <Select className="w-40" value={dims.module} onChange={(e) => setDims({ ...dims, module: e.target.value })}
+          options={[{ value: "", label: "All modules" }, ...Object.entries(MODULE_NAMES).map(([value, label]) => ({ value, label })), { value: "knowledge", label: "Knowledge Hub" }]} />
+        <Select className="w-48" value={dims.agent} onChange={(e) => setDims({ ...dims, agent: e.target.value })}
+          options={[{ value: "", label: "All agents" }, ...Object.keys(AGENT_INFO).map((k) => ({ value: k, label: humanize(k) }))]} />
+        <Select className="w-40" value={dims.user_id} onChange={(e) => setDims({ ...dims, user_id: e.target.value })}
+          options={[{ value: "", label: "All users" }, ...data.by_user.filter((u: any) => u.id).map((u: any) => ({ value: String(u.id), label: u.key }))]} />
+        {filtered && <Button variant="ghost" onClick={() => setDims({ module: "", agent: "", user_id: "" })}>Clear filters</Button>}
       </div>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {(["by_user", "by_module", "by_agent", "by_model"] as const).map((k) => (
-          <Card key={k} title={k.replace("by_", "By ")}>
-            <Table head={["", "Calls", "Tokens in/out", "Cost"]}>
-              {data[k].map((r: any, i: number) => <tr key={i}><td>{r.key || "system"}</td><td>{r.calls}</td><td>{r.input_tokens.toLocaleString()} / {r.output_tokens.toLocaleString()}</td><td>{money(r.cost)}</td></tr>)}
-            </Table>
-          </Card>
-        ))}
+
+      {/* headline numbers */}
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <StatTile label="Estimated cost" value={money(t.cost)} />
+        <StatTile label="AI calls" value={t.calls.toLocaleString()} />
+        <StatTile label="Input tokens" value={compact(t.input_tokens)} />
+        <StatTile label="Output tokens" value={compact(t.output_tokens)} />
       </div>
-      <Card title="Recent calls">
-        <Table head={["When", "User", "Module", "Agent", "Model", "Tokens in/out", "ms", "Status", "Job", "Cost"]}>
-          {data.recent.map((r: any, i: number) => <tr key={i}><td>{fmtDate(r.at, true)}</td><td>{r.user}</td><td>{r.module}</td><td>{r.agent}</td><td>{r.model}</td>
-            <td>{r.input_tokens}/{r.output_tokens}</td><td>{r.duration_ms}</td><td>{r.status}</td><td>{r.job_id || ""}</td><td>{money(r.cost)}</td></tr>)}
-        </Table>
-      </Card>
+
+      <div className="grid grid-cols-1 gap-8 xl:grid-cols-[1fr_360px]">
+        <DailyCost days={data.by_day} range={range} />
+        <BudgetMeter budget={data.budget} canEdit={can("admin.budget")} onEdit={() => setBudgetOpen(true)} />
+      </div>
+
+      {/* breakdown */}
+      <section>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">Cost breakdown</h3>
+          <Segmented active={breakdown} onChange={(k) => setBreakdown(k as any)} items={[
+            { key: "by_agent", label: "Agent" }, { key: "by_user", label: "User" }, { key: "by_module", label: "Module" }, { key: "by_model", label: "Model" },
+          ]} />
+        </div>
+        {rows.length === 0 ? <p className="border-t border-lightborder py-6 text-center text-sm text-muted">No AI usage in this period.</p> : (
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-lightborder text-left text-mono-600">
+              <th className="py-2 font-semibold">Name</th><th className="py-2 text-right font-semibold">Calls</th>
+              <th className="py-2 text-right font-semibold">Tokens in / out</th><th className="py-2 text-right font-semibold">Cost</th>
+              <th className="w-1/3 py-2 pl-6 font-semibold">Share of cost</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const share = t.cost ? (100 * r.cost) / t.cost : 0;
+                return (
+                  <tr key={i} className="border-b border-lightborder">
+                    <td className="py-2">{labelFor(r)}</td>
+                    <td className="py-2 text-right tabular-nums">{r.calls.toLocaleString()}</td>
+                    <td className="py-2 text-right tabular-nums text-muted">{compact(r.input_tokens)} / {compact(r.output_tokens)}</td>
+                    <td className="py-2 text-right tabular-nums">{money(r.cost)}</td>
+                    <td className="py-2 pl-6">
+                      <div className="flex items-center gap-3" title={`${labelFor(r)}: ${money(r.cost)} (${share.toFixed(1)}%)`}>
+                        <div className="h-2 flex-1 rounded-full bg-mono-100">
+                          <div className="h-2 rounded-full bg-mono-800" style={{ width: `${maxCost ? Math.max(2, (100 * r.cost) / maxCost) : 0}%` }} />
+                        </div>
+                        <span className="w-12 text-right tabular-nums text-muted">{share.toFixed(0)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {/* log */}
+      <section>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold">Recent calls</h3>
+          <span className="text-sm text-muted">Prompts and answers are never stored, only these figures.</span>
+        </div>
+        {data.recent.length === 0 ? <p className="border-t border-lightborder py-6 text-center text-sm text-muted">No calls yet.</p> : (
+          <>
+            <table className="w-full text-sm">
+              <thead><tr className="border-b border-lightborder text-left text-mono-600">
+                <th className="py-2 font-semibold">When</th><th className="py-2 font-semibold">User</th><th className="py-2 font-semibold">Agent</th>
+                <th className="py-2 font-semibold">Model</th><th className="py-2 text-right font-semibold">Tokens</th>
+                <th className="py-2 text-right font-semibold">Time</th><th className="py-2 pl-4 font-semibold">Result</th><th className="py-2 text-right font-semibold">Cost</th>
+              </tr></thead>
+              <tbody>
+                {recent.map((r: any, i: number) => {
+                  const ok = ["ok", "end_turn", "stop_sequence"].includes(r.status);
+                  return (
+                    <tr key={i} className="border-b border-lightborder">
+                      <td className="whitespace-nowrap py-2 text-muted">{fmtDate(r.at, true)}</td>
+                      <td className="py-2">{r.user}</td>
+                      <td className="py-2">{humanize(r.agent)}</td>
+                      <td className="py-2 text-muted">{r.model}</td>
+                      <td className="whitespace-nowrap py-2 text-right tabular-nums text-muted">{compact(r.input_tokens)} / {compact(r.output_tokens)}</td>
+                      <td className="py-2 text-right tabular-nums text-muted">{(r.duration_ms / 1000).toFixed(1)}s</td>
+                      <td className="py-2 pl-4">{ok ? <span className="text-muted">Completed</span> : <Badge tone="error">{humanize(r.status)}</Badge>}</td>
+                      <td className="py-2 text-right tabular-nums">{money(r.cost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {data.recent.length > 15 && <div className="mt-3"><Button variant="ghost" onClick={() => setShowAll(!showAll)}>{showAll ? "Show fewer" : `Show all ${data.recent.length}`}</Button></div>}
+          </>
+        )}
+      </section>
+
+      <BudgetDrawer open={budgetOpen} budget={data.budget} onClose={() => setBudgetOpen(false)} onSaved={() => { setBudgetOpen(false); reload(); }} />
     </div>
   );
 }
 
-function Stat({ label, v }: { label: string; v: any }) {
-  return <div><div className="text-sm text-muted">{label}</div><div className="text-h4">{v}</div></div>;
+function StatTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border border-lightborder px-4 py-3">
+      <div className="text-sm text-muted">{label}</div>
+      <div className="mt-1 text-h4 tabular-nums">{value}</div>
+    </div>
+  );
 }
+
+/** Single-series daily cost bars; the hovered bar takes the accent and its values show in the caption. */
+function DailyCost({ days, range }: { days: any[]; range: { start?: string; end?: string } }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const series = useMemo(() => {
+    const byDay = Object.fromEntries(days.map((d) => [d.day, d]));
+    if (!range.start || !range.end) return days;
+    const out = [];
+    for (let d = new Date(`${range.start}T00:00:00`); iso(d) <= range.end; d = new Date(d.getTime() + 86400000)) {
+      const k = iso(d);
+      out.push(byDay[k] || { day: k, calls: 0, cost: 0 });
+    }
+    return out;
+  }, [days, range.start, range.end]);
+  const max = Math.max(...series.map((d) => d.cost), 0);
+  const total = series.reduce((s, d) => s + d.cost, 0);
+  const h = series[hover ?? -1];
+  const W = 100, H = 40, gap = series.length > 60 ? 0.15 : 0.35;
+  const bw = series.length ? W / series.length : W;
+  return (
+    <section>
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h3 className="text-sm font-semibold">Cost per day</h3>
+        <span className="text-sm tabular-nums text-muted">
+          {h ? `${fmtDay(h.day)} · ${money(h.cost)} · ${h.calls} ${h.calls === 1 ? "call" : "calls"}` : series.length ? `${fmtDay(series[0].day)} – ${fmtDay(series[series.length - 1].day)} · ${money(total)}` : ""}
+        </span>
+      </div>
+      {series.length === 0 || max === 0 ? (
+        <div className="flex h-40 items-center justify-center rounded border border-dashed border-border text-sm text-muted">No AI usage in this period.</div>
+      ) : (
+        <div className="relative">
+          <span className="absolute left-0 top-0 text-sm tabular-nums text-muted">{money(max)}</span>
+          <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="h-40 w-full" role="img"
+            aria-label={`Daily AI cost, highest ${money(max)}`} onMouseLeave={() => setHover(null)}>
+            <line x1="0" x2={W} y1={H - 0.1} y2={H - 0.1} stroke="var(--border-gray)" strokeWidth="0.2" vectorEffect="non-scaling-stroke" />
+            {series.map((d, i) => {
+              const bh = max ? Math.max(d.cost > 0 ? 0.6 : 0, ((H - 6) * d.cost) / max) : 0;
+              return (
+                <g key={d.day} onMouseEnter={() => setHover(i)}>
+                  <rect x={i * bw} y="0" width={bw} height={H} fill="transparent" />
+                  <rect x={i * bw + (bw * gap) / 2} y={H - bh} width={bw * (1 - gap)} height={bh} rx="0.4"
+                    fill={hover === i ? "var(--accent)" : "var(--mono-800)"}>
+                    <title>{`${fmtDay(d.day)}: ${money(d.cost)}, ${d.calls} calls`}</title>
+                  </rect>
+                </g>
+              );
+            })}
+          </svg>
+          <div className="mt-1 flex justify-between text-sm text-muted"><span>{fmtDay(series[0].day)}</span><span>{fmtDay(series[series.length - 1].day)}</span></div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function BudgetMeter({ budget, canEdit, onEdit }: { budget: any; canEdit: boolean; onEdit: () => void }) {
+  const month = new Date(`${budget.month}-01T00:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+  if (!budget.amount) {
+    return (
+      <section className="flex flex-col justify-between gap-4 rounded border border-lightborder p-4">
+        <div>
+          <h3 className="text-sm font-semibold">Monthly budget</h3>
+          <p className="mt-1 text-sm text-muted">No budget is set for {month}. Spent so far: {money(budget.spent)}.</p>
+        </div>
+        {canEdit && <div><Button variant="primary" onClick={onEdit}>Set a budget</Button></div>}
+      </section>
+    );
+  }
+  const pct = (100 * budget.spent) / budget.amount;
+  const thresholds: number[] = budget.thresholds || [];
+  const crossed = thresholds.filter((x) => pct >= x);
+  const tone = pct >= 100 ? "error" : crossed.length ? "warning" : "success";
+  const fill = tone === "error" ? "bg-error" : tone === "warning" ? "bg-warning" : "bg-black";
+  return (
+    <section className="flex flex-col gap-4 rounded border border-lightborder p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold">Monthly budget</h3>
+          <p className="text-sm text-muted">{month}</p>
+        </div>
+        {canEdit && <Button variant="ghost" onClick={onEdit}>Edit</Button>}
+      </div>
+      <div>
+        <div className="flex items-baseline gap-2">
+          <span className="text-h4 tabular-nums">{money(budget.spent)}</span>
+          <span className="text-sm text-muted">of {money(budget.amount)}</span>
+        </div>
+        <div className="relative mt-3 h-2 rounded-full bg-mono-100" role="meter" aria-valuemin={0} aria-valuemax={budget.amount} aria-valuenow={budget.spent} aria-label="Budget used">
+          <div className={cx("h-2 rounded-full", fill)} style={{ width: `${Math.min(100, pct)}%` }} />
+          {thresholds.filter((x) => x < 100).map((x) => (
+            <span key={x} className="absolute -top-1 h-4 w-px bg-mono-500" style={{ left: `${x}%` }} title={`Alert at ${x}%`} />
+          ))}
+        </div>
+        <div className="mt-2 flex justify-between text-sm text-muted">
+          <span>{pct.toFixed(0)}% used</span>
+          <span>{budget.remaining >= 0 ? `${money(budget.remaining)} left` : `${money(-budget.remaining)} over`}</span>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 border-t border-lightborder pt-3 text-sm text-muted">
+        <StatusBadge status={tone === "error" ? "Failed" : tone === "warning" ? "Pending" : "Completed"} />
+        <span>{tone === "error" ? "Budget reached" : tone === "warning" ? `Past the ${crossed[crossed.length - 1]}% alert` : "Within budget"}</span>
+        <span className="ml-auto">Alerts at {thresholds.join("%, ")}%{budget.hard_stop ? " · hard stop on" : ""}</span>
+      </div>
+    </section>
+  );
+}
+
+function BudgetDrawer({ open, budget, onClose, onSaved }: { open: boolean; budget: any; onClose: () => void; onSaved: () => void }) {
+  const [amount, setAmount] = useState<number>(budget.amount || 0);
+  const [thresholds, setThresholds] = useState<string[]>((budget.thresholds || [80, 100]).map(String));
+  const [hardStop, setHardStop] = useState<boolean>(!!budget.hard_stop);
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (open) { setAmount(budget.amount || 0); setThresholds((budget.thresholds || [80, 100]).map(String)); setHardStop(!!budget.hard_stop); setErr(""); }
+  }, [open, budget]);
+  async function save() {
+    if (!amount || amount <= 0) return setErr("Enter a budget greater than zero");
+    setSaving(true);
+    try {
+      await api.put("/admin/budget", { amount, thresholds: thresholds.map(Number).filter((n) => n > 0 && n <= 200), hard_stop: hardStop });
+      onSaved();
+    } catch (e) { setErr((e as Error).message); } finally { setSaving(false); }
+  }
+  return (
+    <Drawer open={open} title="Monthly budget" subtitle="Spending is estimated from this application's own usage logs and the model prices."
+      onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={save}>Save budget</Button></>}>
+      <div className="flex flex-col gap-2">
+        {err && <Alert tone="error">{err}</Alert>}
+        <SettingRow title="Budget for this month" help="Shown against spend on the usage page.">
+          <NumberInput value={amount} unit="USD" min={1} step={10} onChange={setAmount} />
+        </SettingRow>
+        <div className="border-b border-lightborder py-3">
+          <div className="text-sm">Alert thresholds</div>
+          <div className="mb-2 text-sm text-muted">Administrators are notified once when spend passes each percentage.</div>
+          <TagInput values={thresholds} onChange={(v) => setThresholds([...v].sort((a, b) => Number(a) - Number(b)))} placeholder="e.g. 50"
+            validate={(v) => /^\d{1,3}$/.test(v) && Number(v) > 0 && Number(v) <= 200 ? null : "Enter a percentage between 1 and 200"} />
+        </div>
+        <SettingRow title="Hard stop at 100%" help="Block new AI calls once the budget is used up.">
+          <Toggle label="Hard stop" checked={hardStop} onChange={setHardStop} />
+        </SettingRow>
+      </div>
+    </Drawer>
+  );
+}
+
 
 type FieldDef = { key: string; title: string; help: string; kind: "number" | "bool"; unit?: string; min?: number; max?: number };
 const SETTING_SECTIONS: { key: string; title: string; description: string; fields: FieldDef[] }[] = [

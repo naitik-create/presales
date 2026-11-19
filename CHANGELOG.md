@@ -13,6 +13,10 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Connection test for OpenAI and Gemini keys.
 
 ### Changed
+- Usage and budget page rebuilt: date presets (this month, 30 / 90 days, all time) and module/agent/user filters in
+  one row; four headline figures; a cost-per-day bar chart with hover details; a monthly budget meter with alert
+  markers and status; a cost breakdown by agent, user, module or model with share bars; a slimmer recent-calls log.
+  The budget is edited in a side panel (amount, alert thresholds, hard stop). The usage API now returns daily totals.
 - Buttons have one distinctive brand style across the application: pill shape (fields stay square-cornered).
   Primary = Motadata accent fill with black text, turning black on hover; secondary = black outline that fills black
   on hover; ghost = light grey pill (darker on hover), so low-emphasis actions still read as buttons;

@@ -402,12 +402,16 @@ def usage(start: date | None = None, end: date | None = None, user_id: int | Non
                  "output_tokens": r[3], "cost": float(r[4])} for r in rows]
 
     users = {u.id: u.full_name for u in db.scalars(select(User))}
+    day = func.date_trunc("day", AIUsageLog.at)
+    daily = db.execute(_usage_filter(select(day, func.count(AIUsageLog.id), func.coalesce(func.sum(AIUsageLog.estimated_cost), 0)),
+                                     start, end, user_id, module, agent, job_id).group_by(day).order_by(day)).all()
     recent = db.scalars(_usage_filter(select(AIUsageLog), start, end, user_id, module, agent, job_id)
                         .order_by(AIUsageLog.at.desc()).limit(200)).all()
     b = db.scalar(select(Budget).where(Budget.month == month_key()))
     spent = float(month_spend(db))
     return {
         "totals": {"calls": totals[0], "input_tokens": totals[1], "output_tokens": totals[2], "cost": float(totals[3])},
+        "by_day": [{"day": d.date().isoformat(), "calls": n, "cost": float(c)} for d, n, c in daily],
         "by_user": grouped(AIUsageLog.user_id, users), "by_module": grouped(AIUsageLog.module),
         "by_agent": grouped(AIUsageLog.agent_key), "by_model": grouped(AIUsageLog.model_id),
         "recent": [{"at": r.at, "user": users.get(r.user_id, "system"), "module": r.module, "agent": r.agent_key,

@@ -50,6 +50,7 @@ const config: Config = {
     extend: {
       width: { sidebar: "232px", "sidebar-collapsed": "56px", 9: "36px", 12: "48px", 20: "80px", 24: "96px", 32: "128px", 40: "160px", 48: "192px", 56: "224px", 96: "384px" },
       maxWidth: { sm: "384px", lg: "512px", content: "1440px", prose: "768px" },
+      height: { 40: "160px" },
       boxShadow: { sm: "0 1px 2px rgb(0 0 0 / 0.08)" },
     },
   },

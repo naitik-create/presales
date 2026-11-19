@@ -65,3 +65,16 @@ def test_svg_with_script_rejected_and_export_needs_png(admin):
     assert admin.post("/api/admin/branding/logomark", headers=HEADERS, files={"file": ("m.svg", good, "image/svg+xml")}).status_code == 200
     assert admin.post("/api/admin/branding/export", headers=HEADERS, files={"file": ("e.svg", good, "image/svg+xml")}).status_code == 400
     assert admin.post("/api/admin/branding/export", headers=HEADERS, files={"file": ("e.png", b"notapng!", "image/png")}).status_code == 400
+
+
+def test_usage_report_daily_totals_and_budget(admin, db):
+    from decimal import Decimal
+    from app.models.ai import AIUsageLog
+    db.add(AIUsageLog(module="ask", agent_key="ask_motadata", model_id="claude-opus-5-5", input_tokens=1000,
+                      output_tokens=200, estimated_cost=Decimal("0.5")))
+    db.commit()
+    assert admin.put("/api/admin/budget", headers=HEADERS, json={"amount": 10, "thresholds": [50, 100], "hard_stop": False}).status_code == 200
+    u = admin.get("/api/admin/usage").json()
+    assert u["totals"]["calls"] == 1 and u["totals"]["cost"] == 0.5
+    assert len(u["by_day"]) == 1 and u["by_day"][0]["cost"] == 0.5
+    assert u["budget"]["amount"] == 10 and u["budget"]["remaining"] == 9.5
