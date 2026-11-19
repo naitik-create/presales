@@ -13,6 +13,12 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Connection test for OpenAI and Gemini keys.
 
 ### Changed
+- Knowledge Hub rebuilt: header with Upload file / Add URL; Sources, Approvals (with waiting count), Sizing rules and
+  Test search as sub-pages; a quiet section list; a source list with one clear status per source (Processing,
+  Failed, Awaiting approval, Approved), status filters with counts, search, live progress and empty states;
+  upload with drag-and-drop, URL and new-section forms in side panels; source details in a side panel (facts,
+  download / new version / fetch again, approval with note, versions, history); one-click approve or reject in the
+  Approvals queue; Test search shows ranked passages with match percentage.
 - Usage and budget page rebuilt: date presets (this month, 30 / 90 days, all time) and module/agent/user filters in
   one row; four headline figures; a cost-per-day bar chart with hover details; a monthly budget meter with alert
   markers and status; a cost breakdown by agent, user, module or model with share bars; a slimmer recent-calls log.

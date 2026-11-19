@@ -1,199 +1,394 @@
 "use client";
-import { Download, Link2, Plus, RefreshCw, Trash2, Upload } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
-import { Alert, Badge, Button, buttonClass, Card, Field, Input, Modal, NumberInput, PageHeader, Select, SettingRow, Spinner, StatusBadge, Table, Tabs, Textarea, Toggle } from "@/components/ui";
+import { ChevronRight, Download, FileText, Globe, Link2, Loader2, Plus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
+import { Alert, Badge, Button, buttonClass, cx, Drawer, Field, Input, Modal, NumberInput, Segmented, Select, SettingRow, Spinner, Table, Textarea, Toggle } from "@/components/ui";
 import { api, download, fmtDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
 
+type Panel = "" | "upload" | "url" | "section";
+const PRODUCTS = ["Both", "ObserveOps", "ServiceOps"];
+const PRIORITY_OPTS = [
+  { value: 1, label: "Current product documentation (highest)" },
+  { value: 2, label: "Internal presales knowledge" },
+  { value: 3, label: "Past submissions (lowest)" },
+];
+
+/** One status per source, combining ingestion and approval, in the order a person cares about. */
+function sourceState(s: any): { tone: "success" | "warning" | "error" | "info" | "neutral"; label: string; busy?: boolean } {
+  if (["Queued", "Processing"].includes(s.ingest_status)) return { tone: "info", label: s.ingest_status === "Queued" ? "Queued" : "Processing", busy: true };
+  if (s.ingest_status === "Failed") return { tone: "error", label: "Failed" };
+  if (s.status === "Pending") return { tone: "warning", label: "Awaiting approval" };
+  if (s.status === "Approved") return { tone: "success", label: "Approved" };
+  if (s.status === "Rejected") return { tone: "neutral", label: "Rejected" };
+  return { tone: "neutral", label: s.status };
+}
+
+function StateLabel({ s }: { s: any }) {
+  const st = sourceState(s);
+  if (st.busy) return <span className="inline-flex items-center gap-2 text-sm text-info"><Loader2 size={14} className="animate-spin" />{st.label}</span>;
+  return <Badge tone={st.tone}>{st.label}</Badge>;
+}
+
 function KnowledgeHome() {
   const { can } = useSession();
+  const router = useRouter();
   const params = useSearchParams();
-  const [tab, setTab] = useState(params.get("tab") || "sources");
-  const tabs = [{ key: "sources", label: "Sections and sources" },
-    ...(can("knowledge.approve") ? [{ key: "approval", label: "Approval queue" }] : []),
-    { key: "sizing", label: "Sizing rules" }, { key: "search", label: "Test retrieval" }];
+  const view = params.get("tab") || "sources";
+  const setView = (k: string) => router.replace(`/knowledge?tab=${k}`, { scroll: false });
+  const pending = useApi<any[]>(can("knowledge.approve") ? "/knowledge/sources?status=Pending" : null, [view]);
+  const waiting = (pending.data || []).filter((s) => s.ingest_status === "Ready").length;
+  const [panel, setPanel] = useState<Panel>("");
+  const [refresh, setRefresh] = useState(0);
+
   return (
     <>
-      <PageHeader title="Knowledge Hub" subtitle="The one repository of approved Motadata material that every AI feature uses." />
-      <Tabs tabs={tabs} active={tab} onChange={setTab} />
-      {tab === "sources" && <Sources initialSource={params.get("source")} />}
-      {tab === "approval" && <Sources approvalOnly />}
-      {tab === "sizing" && <Sizing />}
-      {tab === "search" && <TestSearch />}
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-h4">Knowledge Hub</h1>
+          <p className="text-sm text-muted">Approved Motadata material that Ask Motadata, RFP Intelligence and Demo Intelligence answer from.</p>
+        </div>
+        <div className="flex gap-2">
+          {can("knowledge.register_url") && <Button onClick={() => setPanel("url")}><Link2 size={14} /> Add URL</Button>}
+          {can("knowledge.upload") && <Button variant="primary" onClick={() => setPanel("upload")}><Upload size={14} /> Upload file</Button>}
+        </div>
+      </div>
+      <div className="mb-6">
+        <Segmented active={view} onChange={setView} items={[
+          { key: "sources", label: "Sources" },
+          ...(can("knowledge.approve") ? [{ key: "approval", label: "Approvals", count: waiting }] : []),
+          { key: "sizing", label: "Sizing rules" },
+          { key: "search", label: "Test search" },
+        ]} />
+      </div>
+      {view === "sources" && <Sources key={refresh} initialSource={params.get("source")} onNewSection={() => setPanel("section")} />}
+      {view === "approval" && <Approvals onChanged={() => pending.reload()} />}
+      {view === "sizing" && <Sizing />}
+      {view === "search" && <TestSearch />}
+      <AddPanels panel={panel} onClose={() => setPanel("")} onDone={() => { setPanel(""); setRefresh((r) => r + 1); pending.reload(); }} />
     </>
   );
 }
 
-function Sources({ approvalOnly, initialSource }: { approvalOnly?: boolean; initialSource?: string | null }) {
+function Sources({ initialSource, onNewSection }: { initialSource?: string | null; onNewSection: () => void }) {
   const { can } = useSession();
   const sections = useApi<any[]>("/knowledge/sections");
   const [section, setSection] = useState<number | null>(null);
-  const qs = approvalOnly ? "?status=Pending" : section ? `?section_id=${section}` : "";
-  const sources = useApi<any[]>(`/knowledge/sources${qs}`, [qs]);
-  const [modal, setModal] = useState<"" | "upload" | "url" | "section">("");
+  const [q, setQ] = useState("");
+  const [state, setState] = useState("all");
+  const qs = new URLSearchParams({ ...(section ? { section_id: String(section) } : {}), ...(q.trim() ? { q: q.trim() } : {}) }).toString();
+  const sources = useApi<any[]>(`/knowledge/sources${qs ? `?${qs}` : ""}`, [qs]);
   const [open, setOpen] = useState<number | null>(initialSource ? Number(initialSource) : null);
-  const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
 
+  const busy = (sources.data || []).some((s) => ["Queued", "Processing"].includes(s.ingest_status));
   useEffect(() => {
-    const t = setInterval(() => { if ((sources.data || []).some((s) => ["Queued", "Processing"].includes(s.ingest_status))) sources.reload(); }, 5000);
+    if (!busy) return;
+    const t = setInterval(() => sources.reload(), 4000);
     return () => clearInterval(t);
-  }, [sources]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, qs]);
 
-  async function submit(path: string, form: FormData | object) {
-    try {
-      const r = form instanceof FormData ? await api.upload(path, form) : await api.post(path, form);
-      setMsg(r.warning ? { tone: "warning", text: r.warning } : { tone: "success", text: "Saved. Ingestion runs in the background; approve the source when it is Ready." });
-      setModal("");
-      sources.reload(); sections.reload();
-    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
-  }
-  const secOpts = (sections.data || []).map((s) => ({ value: s.id, label: s.name }));
+  const all = sources.data || [];
+  const counts = useMemo(() => ({
+    all: all.length,
+    approved: all.filter((s) => sourceState(s).label === "Approved").length,
+    awaiting: all.filter((s) => sourceState(s).label === "Awaiting approval").length,
+    failed: all.filter((s) => s.ingest_status === "Failed").length,
+  }), [all]);
+  const shown = all.filter((s) => state === "all" || (state === "approved" && sourceState(s).label === "Approved")
+    || (state === "awaiting" && sourceState(s).label === "Awaiting approval") || (state === "failed" && s.ingest_status === "Failed"));
+  const total = (s: any) => Object.values(s.counts as Record<string, number>).reduce((a, b) => a + b, 0);
+  const current = (sections.data || []).find((s) => s.id === section);
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[256px_1fr]">
-      {!approvalOnly && (
-        <div className="flex flex-col gap-1">
-          <button onClick={() => setSection(null)} className={`rounded px-3 py-2 text-left text-sm ${!section ? "bg-offwhite font-semibold" : "hover:bg-offwhite"}`}>All sections</button>
-          {(sections.data || []).map((s) => (
-            <button key={s.id} onClick={() => setSection(s.id)} className={`flex justify-between rounded px-3 py-2 text-left text-sm ${section === s.id ? "bg-offwhite font-semibold" : "hover:bg-offwhite"}`}>
-              <span>{s.name}{!s.enabled && " (disabled)"}</span><span className="text-muted">{Object.values(s.counts as Record<string, number>).reduce((a, b) => a + b, 0)}</span>
-            </button>
-          ))}
-          {can("knowledge.manage_sections") && <Button variant="ghost" onClick={() => setModal("section")}><Plus size={16} /> Section</Button>}
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[224px_1fr]">
+      <nav aria-label="Sections" className="flex flex-col gap-1 lg:sticky lg:top-16 lg:self-start">
+        <div className="mb-1 px-2 text-sm text-muted">Sections</div>
+        <button onClick={() => setSection(null)} className={cx("flex items-center justify-between rounded px-2 py-1 text-left text-sm", !section ? "bg-mono-100 font-semibold" : "text-mono-700 hover:bg-offwhite")}>
+          <span>All sources</span><span className="tabular-nums text-muted">{(sections.data || []).reduce((a, s) => a + total(s), 0)}</span>
+        </button>
+        {(sections.data || []).map((s) => (
+          <button key={s.id} onClick={() => setSection(s.id)} title={s.description}
+            className={cx("flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-sm", section === s.id ? "bg-mono-100 font-semibold" : "text-mono-700 hover:bg-offwhite", !s.enabled && "text-muted")}>
+            <span className="truncate">{s.name}</span><span className="tabular-nums text-muted">{total(s) || ""}</span>
+          </button>
+        ))}
+        {can("knowledge.manage_sections") && <div className="mt-2 px-2"><Button variant="ghost" onClick={onNewSection}><Plus size={14} /> New section</Button></div>}
+      </nav>
+
+      <section className="min-w-0">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">{current ? current.name : "All sources"}</h2>
+            {current?.description && <p className="text-sm text-muted">{current.description}</p>}
+          </div>
         </div>
-      )}
-      <div className={approvalOnly ? "lg:col-span-2" : ""}>
-        {msg && <div className="mb-4"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
-        {!approvalOnly && (
-          <div className="mb-4 flex gap-2">
-            {can("knowledge.upload") && <Button variant="primary" onClick={() => setModal("upload")}><Upload size={16} /> Upload file</Button>}
-            {can("knowledge.register_url") && <Button onClick={() => setModal("url")}><Link2 size={16} /> Register URL</Button>}
+        <div className="mb-3 mt-3 flex flex-wrap items-center justify-between gap-3">
+          <Segmented active={state} onChange={setState} items={[
+            { key: "all", label: "All", count: counts.all }, { key: "approved", label: "Approved", count: counts.approved },
+            { key: "awaiting", label: "Awaiting approval", count: counts.awaiting }, { key: "failed", label: "Failed", count: counts.failed },
+          ]} />
+          <div className="relative w-full max-w-sm">
+            <Search size={14} className="absolute left-2 top-2 text-muted" />
+            <Input className="pl-8" placeholder="Search by title" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-        )}
-        {sources.loading && !sources.data ? <Spinner /> : (
-          <Table head={["Source", "Section", "Product", "Ingestion", "Status", "Updated", ""]} empty={approvalOnly ? "Nothing waiting for approval." : "No sources yet."}>
-            {(sources.data || []).map((s) => (
-              <tr key={s.id}>
-                <td className="font-semibold">{s.title}<div className="text-sm font-normal text-muted">{s.kind === "url" ? s.url : s.document_type}{s.label && ` · ${s.label}`}</div>
-                  {s.duplicate_of && <Badge tone="warning">Duplicate of #{s.duplicate_of}</Badge>}</td>
-                <td>{s.section}</td><td>{s.product}{s.product_version && ` ${s.product_version}`}</td>
-                <td><StatusBadge status={s.ingest_status} />{s.ingest_error && <div className="text-sm text-error">{s.ingest_error}</div>}</td>
-                <td><StatusBadge status={s.status} /></td><td>{fmtDate(s.updated_at || s.created_at)}</td>
-                <td><Button variant="ghost" onClick={() => setOpen(s.id)}>Open</Button></td>
-              </tr>
+        </div>
+
+        {sources.loading && !sources.data ? <Spinner /> : shown.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded border border-dashed border-border px-6 py-12 text-center">
+            <FileText size={24} className="text-muted" />
+            <div className="text-sm font-semibold">{q || state !== "all" ? "No sources match" : "No sources here yet"}</div>
+            <p className="max-w-sm text-sm text-muted">{q || state !== "all" ? "Try a different search or filter." : "Upload product documents or register documentation URLs. Sources become searchable once they are approved."}</p>
+          </div>
+        ) : (
+          <ul className="border-t border-lightborder">
+            {shown.map((s) => (
+              <li key={s.id}>
+                <button onClick={() => setOpen(s.id)} className="flex w-full items-center gap-3 border-b border-lightborder px-2 py-3 text-left hover:bg-offwhite">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">
+                    {s.kind === "url" ? <Globe size={16} /> : <FileText size={16} />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{s.title}</span>
+                    <span className="block truncate text-sm text-muted">
+                      {[!section && s.section, s.product !== "Both" ? `${s.product}${s.product_version ? ` ${s.product_version}` : ""}` : s.product_version,
+                        s.kind === "url" ? "Web page" : s.document_type, s.label, `Updated ${fmtDate(s.updated_at || s.created_at)}`].filter(Boolean).join(" · ")}
+                    </span>
+                  </span>
+                  {s.duplicate_of && <span className="text-sm text-warning">Duplicate</span>}
+                  <span className="shrink-0"><StateLabel s={s} /></span>
+                  <ChevronRight size={16} className="shrink-0 text-muted" />
+                </button>
+              </li>
             ))}
-          </Table>
+          </ul>
         )}
-      </div>
-      <Modal open={modal === "upload"} title="Upload file" onClose={() => setModal("")}>
-        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); submit("/knowledge/sources/upload", new FormData(e.currentTarget)); }}>
-          <Field label="Section"><Select name="section_id" defaultValue={section || undefined} options={secOpts} /></Field>
-          <Field label="Title"><Input name="title" placeholder="Defaults to the file name" /></Field>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Product"><Select name="product" options={["Both", "ObserveOps", "ServiceOps"]} /></Field>
-            <Field label="Product version"><Input name="product_version" /></Field>
-            <Field label="Document type"><Input name="document_type" /></Field>
-            <Field label="Publication date"><Input name="publication_date" type="date" /></Field>
-          </div>
-          <Field label="Label" hint="For competitor information: verified or internal observation."><Select name="label" options={["", "verified", "internal observation"]} /></Field>
-          <Field label="File" hint="PDF (scanned PDFs use OCR), DOCX, DOC, XLSX, XLS, CSV, TXT or MD."><input type="file" name="file" required /></Field>
-          <div><Button variant="primary" type="submit">Upload</Button></div>
-        </form>
-      </Modal>
-      <UrlModal open={modal === "url"} onClose={() => setModal("")} sections={secOpts} defaultSection={section} onSubmit={(b: object) => submit("/knowledge/sources/url", b)} />
-      <SectionModal open={modal === "section"} onClose={() => setModal("")} onSubmit={(b: object) => submit("/knowledge/sections", b)} />
-      {open && <SourceModal id={open} onClose={() => setOpen(null)} onChanged={() => sources.reload()} />}
+      </section>
+      <SourceDrawer id={open} onClose={() => setOpen(null)} onChanged={() => { sources.reload(); sections.reload(); }} />
     </div>
   );
 }
 
-function UrlModal({ open, onClose, sections, defaultSection, onSubmit }: any) {
-  const [b, setB] = useState<any>({ section_id: defaultSection || sections[0]?.value, url: "", title: "", product: "Both", product_version: "" });
-  useEffect(() => { setB((x: any) => ({ ...x, section_id: defaultSection || sections[0]?.value })); }, [defaultSection, sections]);
+function Approvals({ onChanged }: { onChanged: () => void }) {
+  const list = useApi<any[]>("/knowledge/sources?status=Pending");
+  const [open, setOpen] = useState<number | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [msg, setMsg] = useState<{ tone: "error" | "success"; text: string } | null>(null);
+  const ready = (list.data || []).filter((s) => s.ingest_status === "Ready");
+  const processing = (list.data || []).filter((s) => s.ingest_status !== "Ready");
+  async function act(s: any, action: "approve" | "reject") {
+    setBusy(s.id);
+    try { await api.post(`/knowledge/sources/${s.id}/${action}`, { note: "" }); setMsg({ tone: "success", text: `"${s.title}" ${action === "approve" ? "approved" : "rejected"}.` }); list.reload(); onChanged(); }
+    catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setBusy(null); }
+  }
+  if (!list.data) return <Spinner />;
   return (
-    <Modal open={open} title="Register URL" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <Field label="Section"><Select value={b.section_id} onChange={(e) => setB({ ...b, section_id: Number(e.target.value) })} options={sections} /></Field>
-        <Field label="URL" hint="Only registered domains can be fetched (Administration > Settings)."><Input value={b.url} onChange={(e) => setB({ ...b, url: e.target.value })} /></Field>
-        <Field label="Title"><Input value={b.title} onChange={(e) => setB({ ...b, title: e.target.value })} /></Field>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Product"><Select value={b.product} onChange={(e) => setB({ ...b, product: e.target.value })} options={["Both", "ObserveOps", "ServiceOps"]} /></Field>
-          <Field label="Product version"><Input value={b.product_version} onChange={(e) => setB({ ...b, product_version: e.target.value })} /></Field>
-        </div>
-        <div><Button variant="primary" disabled={!b.url} onClick={() => onSubmit({ ...b, section_id: Number(b.section_id) })}>Register</Button></div>
-      </div>
-    </Modal>
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted">Only approved sources are used in answers. Check each document is current and official before approving.</p>
+      {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+      {ready.length === 0 ? (
+        <div className="rounded border border-dashed border-border px-6 py-12 text-center text-sm text-muted">Nothing is waiting for approval.</div>
+      ) : (
+        <ul className="border-t border-lightborder">
+          {ready.map((s) => (
+            <li key={s.id} className="flex flex-wrap items-center gap-3 border-b border-lightborder px-2 py-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">{s.kind === "url" ? <Globe size={16} /> : <FileText size={16} />}</span>
+              <button className="min-w-0 flex-1 text-left" onClick={() => setOpen(s.id)}>
+                <span className="block truncate text-sm font-semibold hover:underline">{s.title}</span>
+                <span className="block truncate text-sm text-muted">{[s.section, s.product, s.product_version, `Added ${fmtDate(s.created_at)}`].filter(Boolean).join(" · ")}</span>
+              </button>
+              {s.duplicate_of && <span className="text-sm text-warning">Possible duplicate</span>}
+              <div className="flex gap-2">
+                <Button variant="ghost" disabled={busy === s.id} onClick={() => act(s, "reject")}>Reject</Button>
+                <Button variant="primary" loading={busy === s.id} onClick={() => act(s, "approve")}>Approve</Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {processing.length > 0 && <p className="text-sm text-muted">{processing.length} more {processing.length === 1 ? "source is" : "sources are"} still being processed and will appear here when ready.</p>}
+      <SourceDrawer id={open} onClose={() => setOpen(null)} onChanged={() => { list.reload(); onChanged(); }} />
+    </div>
   );
 }
 
-function SectionModal({ open, onClose, onSubmit }: any) {
-  const [b, setB] = useState({ name: "", description: "", used_by: "", priority: 1, enabled: true, sort: 200 });
-  return (
-    <Modal open={open} title="New section" onClose={onClose}>
-      <div className="flex flex-col gap-4">
-        <Field label="Name"><Input value={b.name} onChange={(e) => setB({ ...b, name: e.target.value })} /></Field>
-        <Field label="Description"><Input value={b.description} onChange={(e) => setB({ ...b, description: e.target.value })} /></Field>
-        <Field label="Source priority" hint="1 current documentation, 2 internal knowledge, 3 past submissions">
-          <Select value={b.priority} onChange={(e) => setB({ ...b, priority: Number(e.target.value) })} options={[{ value: 1, label: "1" }, { value: 2, label: "2" }, { value: 3, label: "3" }]} /></Field>
-        <div><Button variant="primary" disabled={!b.name} onClick={() => onSubmit(b)}>Create</Button></div>
-      </div>
-    </Modal>
-  );
-}
-
-function SourceModal({ id, onClose, onChanged }: { id: number; onClose: () => void; onChanged: () => void }) {
-  const { can } = useSession();
-  const s = useApi<any>(`/knowledge/sources/${id}`);
-  const [note, setNote] = useState("");
+function AddPanels({ panel, onClose, onDone }: { panel: Panel; onClose: () => void; onDone: () => void }) {
+  const sections = useApi<any[]>("/knowledge/sections");
+  const secOpts = (sections.data || []).filter((s) => s.enabled).map((s) => ({ value: String(s.id), label: s.name }));
+  const blank = { section_id: "", title: "", product: "Both", product_version: "", document_type: "", publication_date: "", label: "", url: "" };
+  const [f, setF] = useState<any>(blank);
+  const [file, setFile] = useState<File | null>(null);
+  const [sec, setSec] = useState({ name: "", description: "", priority: 1 });
   const [err, setErr] = useState("");
-  const act = async (a: string) => {
-    try { await api.post(`/knowledge/sources/${id}/${a}`, { note }); s.reload(); onChanged(); } catch (e) { setErr((e as Error).message); }
-  };
-  if (!s.data) return null;
-  const d = s.data;
+  const [warn, setWarn] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (panel) { setF({ ...blank, section_id: secOpts[0]?.value || "" }); setFile(null); setErr(""); setWarn(""); setSec({ name: "", description: "", priority: 1 }); } },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [panel]);
+  const isCompetitor = (sections.data || []).find((s) => String(s.id) === f.section_id)?.key === "competitor_information";
+
+  async function submit() {
+    setSaving(true); setErr("");
+    try {
+      if (panel === "upload") {
+        if (!file) throw new Error("Choose a file to upload");
+        const fd = new FormData();
+        Object.entries(f).forEach(([k, v]) => { if (k !== "url" && v) fd.set(k, String(v)); });
+        fd.set("file", file);
+        const r = await api.upload("/knowledge/sources/upload", fd);
+        if (r.warning) { setWarn(r.warning); setSaving(false); return; }
+      } else if (panel === "url") {
+        await api.post("/knowledge/sources/url", { ...f, section_id: Number(f.section_id), document_type: f.document_type || "Online documentation" });
+      } else {
+        await api.post("/knowledge/sections", { ...sec, used_by: "", enabled: true, sort: 200 });
+      }
+      onDone();
+    } catch (e) { setErr((e as Error).message); } finally { setSaving(false); }
+  }
+  const footer = warn
+    ? <><span className="mr-auto text-sm text-warning">{warn}</span><Button variant="primary" onClick={onDone}>Done</Button></>
+    : <><Button variant="ghost" onClick={onClose}>Cancel</Button><Button variant="primary" loading={saving} onClick={submit}>
+      {panel === "upload" ? "Upload" : panel === "url" ? "Add URL" : "Create section"}</Button></>;
+  const meta = (
+    <>
+      <Field label="Section"><Select value={f.section_id} onChange={(e) => setF({ ...f, section_id: e.target.value })} options={secOpts} /></Field>
+      <div className="grid grid-cols-2 gap-4">
+        <Field label="Product"><Select value={f.product} onChange={(e) => setF({ ...f, product: e.target.value })} options={PRODUCTS} /></Field>
+        <Field label="Product version"><Input value={f.product_version} placeholder="e.g. 8.2" onChange={(e) => setF({ ...f, product_version: e.target.value })} /></Field>
+      </div>
+      {isCompetitor && <Field label="Label" hint="Answers show whether a comparison is verified or an internal observation.">
+        <Select value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} options={[{ value: "", label: "Choose" }, { value: "verified", label: "Verified" }, { value: "internal observation", label: "Internal observation" }]} /></Field>}
+    </>
+  );
   return (
-    <Modal open title={d.title} onClose={onClose} wide>
+    <Drawer open={!!panel} onClose={onClose} footer={footer}
+      title={panel === "upload" ? "Upload a file" : panel === "url" ? "Add a documentation URL" : "New section"}
+      subtitle={panel === "section" ? "Sections organise sources and control who can see them." : "The source is processed in the background and becomes searchable after approval."}>
       <div className="flex flex-col gap-4">
         {err && <Alert tone="error">{err}</Alert>}
-        <div className="flex flex-wrap items-center gap-2 text-sm"><StatusBadge status={d.status} /><StatusBadge status={d.ingest_status} />
-          <span>{d.section}</span><span>{d.product} {d.product_version}</span><span>{d.chunks} chunks</span><span>Version {d.current_version}</span></div>
-        {d.kind === "url" && <p className="text-sm"><a className="underline" href={d.url} target="_blank" rel="noreferrer">{d.url}</a> · Last successful fetch {fmtDate(d.last_fetch_ok_at, true) || "never"} · Last attempt {fmtDate(d.last_fetch_attempt_at, true) || "never"}</p>}
-        {d.ingest_error && <Alert tone="error">{d.ingest_error}</Alert>}
-        <div className="flex flex-wrap gap-2">
-          {d.kind === "file" && <Button onClick={() => download(`/knowledge/sources/${id}/download`)}><Download size={16} /> Original</Button>}
-          {d.kind === "url" && can("knowledge.register_url") && <Button onClick={() => act("resync")}><RefreshCw size={16} /> Re-sync</Button>}
-          {d.kind === "file" && can("knowledge.upload") && (
-            <label className={buttonClass("secondary")}>
-              <Upload size={16} /> New version
-              <input type="file" className="hidden" onChange={async (e) => {
-                const f = e.target.files?.[0]; if (!f) return;
-                const fd = new FormData(); fd.set("file", f);
-                try { await api.upload(`/knowledge/sources/${id}/versions`, fd); s.reload(); onChanged(); } catch (x) { setErr((x as Error).message); }
-              }} />
-            </label>
-          )}
-        </div>
-        {can("knowledge.approve") && (
-          <Card title="Approval">
-            <Textarea rows={2} placeholder="Note (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-            <div className="mt-2 flex gap-2">
-              {d.status !== "Approved" && <Button variant="primary" onClick={() => act("approve")}>Approve</Button>}
-              {d.status === "Pending" && <Button onClick={() => act("reject")}>Reject</Button>}
-              {d.status === "Approved" && <Button onClick={() => act("disable")}>Disable</Button>}
-              {d.status === "Disabled" && <Button onClick={() => act("enable")}>Enable</Button>}
-            </div>
-          </Card>
-        )}
-        <Table head={["Version", "Pages", "OCR", "Embedding model", "Uploaded"]}>
-          {d.versions.map((v: any) => <tr key={v.version}><td>{v.version}</td><td>{v.page_count || ""}</td><td>{v.used_ocr ? "Yes" : ""}</td><td>{v.embedding_model}</td><td>{fmtDate(v.created_at, true)}</td></tr>)}
-        </Table>
-        {d.history.length > 0 && <ul className="text-sm">{d.history.map((h: any, i: number) => <li key={i}>{fmtDate(h.at, true)} · {h.action}{h.note && `: ${h.note}`}</li>)}</ul>}
+        {panel === "upload" && <>
+          <label className={cx("flex cursor-pointer flex-col items-center gap-2 rounded border border-dashed px-6 py-8 text-center", file ? "border-black" : "border-border hover:border-mono-500")}
+            onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const x = e.dataTransfer.files?.[0]; if (x) setFile(x); }}>
+            <Upload size={20} className="text-muted" />
+            {file ? <span className="text-sm font-semibold">{file.name}</span> : <span className="text-sm"><b>Choose a file</b> or drag it here</span>}
+            <span className="text-sm text-muted">PDF (scanned PDFs are read with OCR), Word, Excel, CSV, TXT or Markdown</span>
+            <input type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
+          <Field label="Title" hint="Leave empty to use the file name."><Input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
+          {meta}
+          <div className="grid grid-cols-2 gap-4">
+            <Field label="Document type"><Input value={f.document_type} placeholder="e.g. Datasheet" onChange={(e) => setF({ ...f, document_type: e.target.value })} /></Field>
+            <Field label="Publication date"><Input type="date" value={f.publication_date} onChange={(e) => setF({ ...f, publication_date: e.target.value })} /></Field>
+          </div>
+        </>}
+        {panel === "url" && <>
+          <Field label="URL" hint="Only domains allowed in Administration > Settings can be fetched."><Input value={f.url} placeholder="https://docs.motadata.com/…" onChange={(e) => setF({ ...f, url: e.target.value })} /></Field>
+          <Field label="Title" hint="Leave empty to use the URL."><Input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></Field>
+          {meta}
+        </>}
+        {panel === "section" && <>
+          <Field label="Name"><Input value={sec.name} onChange={(e) => setSec({ ...sec, name: e.target.value })} /></Field>
+          <Field label="Description"><Input value={sec.description} onChange={(e) => setSec({ ...sec, description: e.target.value })} /></Field>
+          <Field label="Priority when sources disagree"><Select value={sec.priority} onChange={(e) => setSec({ ...sec, priority: Number(e.target.value) })} options={PRIORITY_OPTS} /></Field>
+        </>}
       </div>
-    </Modal>
+    </Drawer>
   );
 }
+
+function SourceDrawer({ id, onClose, onChanged }: { id: number | null; onClose: () => void; onChanged: () => void }) {
+  const { can } = useSession();
+  const s = useApi<any>(id ? `/knowledge/sources/${id}` : null, [id]);
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => { setNote(""); setErr(""); }, [id]);
+  const act = async (a: string) => {
+    try { await api.post(`/knowledge/sources/${id}/${a}`, { note }); setNote(""); s.reload(); onChanged(); } catch (e) { setErr((e as Error).message); }
+  };
+  const d = id && s.data?.id === id ? s.data : null;
+  const fact = (k: string, v: ReactNode) => <div><dt className="text-muted">{k}</dt><dd>{v || "—"}</dd></div>;
+  return (
+    <Drawer open={!!id} title={d?.title || "Source"} subtitle={d ? `${d.section} · ${d.kind === "url" ? "Web page" : "File"}` : ""} onClose={onClose}>
+      {!d ? <Spinner /> : (
+        <div className="flex flex-col gap-6">
+          {err && <Alert tone="error">{err}</Alert>}
+          <div className="flex items-center gap-3"><StateLabel s={d} />{d.duplicate_of && <span className="text-sm text-warning">Same file as source #{d.duplicate_of}</span>}</div>
+          {d.ingest_error && <Alert tone="error">{d.ingest_error}</Alert>}
+
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            {fact("Product", `${d.product}${d.product_version ? ` ${d.product_version}` : ""}`)}
+            {fact("Document type", d.document_type)}
+            {fact("Searchable passages", d.chunks)}
+            {fact("Version", d.current_version || "—")}
+            {fact("Added", fmtDate(d.created_at))}
+            {fact("Approved", d.approved_at ? fmtDate(d.approved_at) : "")}
+            {d.label && fact("Label", d.label)}
+          </dl>
+
+          {d.kind === "url" && (
+            <div className="text-sm">
+              <a className="break-all underline" href={d.url} target="_blank" rel="noreferrer">{d.url}</a>
+              <p className="mt-1 text-muted">Last fetched {fmtDate(d.last_fetch_ok_at, true) || "never"}{d.last_fetch_attempt_at && d.last_fetch_attempt_at !== d.last_fetch_ok_at ? ` · last attempt ${fmtDate(d.last_fetch_attempt_at, true)}` : ""}</p>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {d.kind === "file" && <Button onClick={() => download(`/knowledge/sources/${id}/download`)}><Download size={14} /> Download</Button>}
+            {d.kind === "url" && can("knowledge.register_url") && <Button onClick={() => act("resync")}><RefreshCw size={14} /> Fetch again</Button>}
+            {d.kind === "file" && can("knowledge.upload") && (
+              <label className={buttonClass("secondary")}>
+                <Upload size={14} /> Upload new version
+                <input type="file" className="hidden" onChange={async (e) => {
+                  const x = e.target.files?.[0]; if (!x) return;
+                  const fd = new FormData(); fd.set("file", x);
+                  try { await api.upload(`/knowledge/sources/${id}/versions`, fd); s.reload(); onChanged(); } catch (y) { setErr((y as Error).message); }
+                }} />
+              </label>
+            )}
+          </div>
+
+          {can("knowledge.approve") && d.ingest_status === "Ready" && (
+            <section className="flex flex-col gap-2 border-t border-lightborder pt-4">
+              <h3 className="text-sm font-semibold">Approval</h3>
+              <Textarea rows={2} placeholder="Note for the record (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
+              <div className="flex gap-2">
+                {d.status === "Pending" && <><Button variant="primary" onClick={() => act("approve")}>Approve</Button><Button variant="ghost" onClick={() => act("reject")}>Reject</Button></>}
+                {d.status === "Approved" && <Button variant="danger" onClick={() => act("disable")}>Disable</Button>}
+                {["Disabled", "Rejected"].includes(d.status) && <Button onClick={() => act("approve")}>Approve again</Button>}
+              </div>
+            </section>
+          )}
+
+          {d.versions.length > 0 && (
+            <section className="border-t border-lightborder pt-4">
+              <h3 className="mb-2 text-sm font-semibold">Versions</h3>
+              <ul className="divide-y divide-lightborder text-sm">
+                {d.versions.map((v: any) => (
+                  <li key={v.version} className="flex justify-between gap-3 py-2">
+                    <span>Version {v.version}{v.version === d.current_version && <span className="text-muted"> · current</span>}</span>
+                    <span className="text-muted">{[v.page_count ? `${v.page_count} pages` : "", v.used_ocr ? "OCR" : "", fmtDate(v.created_at)].filter(Boolean).join(" · ")}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {d.history.length > 0 && (
+            <section className="border-t border-lightborder pt-4">
+              <h3 className="mb-2 text-sm font-semibold">History</h3>
+              <ul className="flex flex-col gap-1 text-sm text-muted">
+                {d.history.map((h: any, i: number) => <li key={i}>{fmtDate(h.at, true)} · {cap(h.action)}{h.note && `: ${h.note}`}</li>)}
+              </ul>
+            </section>
+          )}
+        </div>
+      )}
+    </Drawer>
+  );
+}
+
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 type Range = { name: string; min: string; max: string };
 type Spec = { name: string; value: string };
@@ -310,16 +505,37 @@ function Sizing() {
 function TestSearch() {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<any[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setBusy(true);
+    try { setHits(await api.get(`/knowledge/search?q=${encodeURIComponent(q)}`)); } finally { setBusy(false); }
+  }
   return (
-    <div className="flex flex-col gap-4">
-      <form className="flex max-w-prose gap-2" onSubmit={async (e) => { e.preventDefault(); setHits(await api.get(`/knowledge/search?q=${encodeURIComponent(q)}`)); }}>
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="See which approved chunks a question retrieves" />
-        <Button type="submit">Search</Button>
+    <div className="flex max-w-prose flex-col gap-4">
+      <p className="text-sm text-muted">Type a question to see which approved passages the AI would read to answer it. Only sections you can see are searched.</p>
+      <form className="flex gap-2" onSubmit={run}>
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-2 top-2 text-muted" />
+          <Input className="pl-8" value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. Does ObserveOps support high availability?" />
+        </div>
+        <Button type="submit" variant="primary" loading={busy}>Search</Button>
       </form>
-      {hits && (hits.length ? hits.map((h) => (
-        <Card key={h.id} title={<span>{h.title} <span className="text-sm font-normal text-muted">{h.section} › {h.section_path} {h.page} · score {h.score}</span></span>}>
-          <p className="whitespace-pre-wrap text-sm">{h.text}</p>
-        </Card>)) : <p className="text-sm text-muted">No approved sources matched.</p>)}
+      {hits && (hits.length === 0 ? <p className="text-sm text-muted">No approved sources matched.</p> : (
+        <ol className="border-t border-lightborder">
+          {hits.map((h, i) => (
+            <li key={h.id} className="border-b border-lightborder py-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-sm font-semibold">{i + 1}. {h.title}</span>
+                <span className="shrink-0 text-sm tabular-nums text-muted">{Math.round(h.score * 100)}% match</span>
+              </div>
+              <div className="text-sm text-muted">{[h.section, h.section_path, h.page].filter(Boolean).join(" › ")}</div>
+              <p className="mt-1 line-clamp-4 whitespace-pre-wrap text-sm">{h.text}</p>
+            </li>
+          ))}
+        </ol>
+      ))}
     </div>
   );
 }
