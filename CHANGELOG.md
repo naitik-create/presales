@@ -3,7 +3,7 @@
 Versions follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
 Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSION` file.
 
-## Unreleased
+## 1.0.2 — 2026-11-19
 
 ### Added
 - Agents can use models from **OpenAI**, **Google Gemini** and **Azure OpenAI** as well as Anthropic Claude. Models are
