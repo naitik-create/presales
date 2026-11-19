@@ -3,6 +3,16 @@
 Versions follow [Semantic Versioning](https://semver.org/): MAJOR.MINOR.PATCH.
 Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSION` file.
 
+## Unreleased
+
+### Changed
+- Ask Motadata redesigned as a modern assistant: full-height layout with a slim conversation list (New chat,
+  recent conversations, delete on hover); a welcome screen with suggested questions; a growing composer with the
+  product choice built in (Enter to send, Shift + Enter for a new line); user questions as light bubbles; answers with
+  a status badge, formatted lists and bold text, numbered citation markers, limitations, and source cards that open
+  the document; copy, helpful and not-helpful actions. The gap log is now "Unanswered questions", reached from the
+  conversation list.
+
 ## 1.0.2 — 2026-11-19
 
 ### Added
