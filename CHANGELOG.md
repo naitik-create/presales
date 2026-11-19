@@ -13,6 +13,16 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 - Connection test for OpenAI and Gemini keys.
 
 ### Changed
+- Knowledge Hub layout simplified after reviewing it on screen: underlined tabs; four summary tiles (total, approved,
+  awaiting approval, failed) that also filter the list; one toolbar row (section dropdown, search, Manage sections);
+  a sources table; sections managed in a side panel with on/off switches; proper empty states with action buttons
+  for Sources, Approvals and Sizing rules.
+
+### Fixed
+- Dropdowns and fields now respect a set width instead of always stretching to full width.
+- Usage "This month" started a day early in time zones east of UTC.
+
+### Changed (earlier in this release)
 - Knowledge Hub rebuilt: header with Upload file / Add URL; Sources, Approvals (with waiting count), Sizing rules and
   Test search as sub-pages; a quiet section list; a source list with one clear status per source (Processing,
   Failed, Awaiting approval, Approved), status filters with counts, search, live progress and empty states;

@@ -49,16 +49,18 @@ export function Field({ label, hint, children, className }: { label: string; hin
   );
 }
 
-const inputCls = "w-full rounded border border-border bg-white px-3 py-1 text-sm placeholder:text-mono-500 focus:border-black focus:outline-none";
+const inputCls = "rounded border border-border bg-white px-3 py-1 text-sm placeholder:text-mono-500 focus:border-black focus:outline-none";
+/** Fields fill their container unless the caller gives them a width (w-40, w-56 …). */
+const fieldCls = (extra?: string) => cx(inputCls, /(^|\s)w-/.test(extra || "") ? "" : "w-full", extra);
 export function Input(p: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...p} className={cx(inputCls, p.className)} />;
+  return <input {...p} className={fieldCls(p.className)} />;
 }
 export function Textarea(p: TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea rows={4} {...p} className={cx(inputCls, p.className)} />;
+  return <textarea rows={4} {...p} className={fieldCls(p.className)} />;
 }
 export function Select({ options, ...p }: SelectHTMLAttributes<HTMLSelectElement> & { options: (string | { value: string | number; label: string })[] }) {
   return (
-    <select {...p} className={cx(inputCls, p.className)}>
+    <select {...p} className={fieldCls(p.className)}>
       {options.map((o) => typeof o === "string"
         ? <option key={o} value={o}>{o}</option>
         : <option key={o.value} value={o.value}>{o.label}</option>)}

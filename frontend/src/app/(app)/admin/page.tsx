@@ -828,7 +828,8 @@ function BrandingTab() {
 const PRESETS = [
   { key: "month", label: "This month" }, { key: "30", label: "Last 30 days" }, { key: "90", label: "Last 90 days" }, { key: "all", label: "All time" },
 ];
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+// Local calendar date (toISOString would shift to UTC and show the previous day east of Greenwich)
+const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 function presetRange(key: string): { start?: string; end?: string } {
   const now = new Date();
   if (key === "month") return { start: iso(new Date(now.getFullYear(), now.getMonth(), 1)), end: iso(now) };
@@ -863,11 +864,11 @@ function Usage() {
       {/* filters: one row above everything they control */}
       <div className="flex flex-wrap items-center gap-3">
         <Segmented items={PRESETS} active={preset} onChange={setPreset} />
-        <Select className="w-40" value={dims.module} onChange={(e) => setDims({ ...dims, module: e.target.value })}
+        <Select className="w-32" value={dims.module} onChange={(e) => setDims({ ...dims, module: e.target.value })}
           options={[{ value: "", label: "All modules" }, ...Object.entries(MODULE_NAMES).map(([value, label]) => ({ value, label })), { value: "knowledge", label: "Knowledge Hub" }]} />
-        <Select className="w-48" value={dims.agent} onChange={(e) => setDims({ ...dims, agent: e.target.value })}
+        <Select className="w-40" value={dims.agent} onChange={(e) => setDims({ ...dims, agent: e.target.value })}
           options={[{ value: "", label: "All agents" }, ...Object.keys(AGENT_INFO).map((k) => ({ value: k, label: humanize(k) }))]} />
-        <Select className="w-40" value={dims.user_id} onChange={(e) => setDims({ ...dims, user_id: e.target.value })}
+        <Select className="w-32" value={dims.user_id} onChange={(e) => setDims({ ...dims, user_id: e.target.value })}
           options={[{ value: "", label: "All users" }, ...data.by_user.filter((u: any) => u.id).map((u: any) => ({ value: String(u.id), label: u.key }))]} />
         {filtered && <Button variant="ghost" onClick={() => setDims({ module: "", agent: "", user_id: "" })}>Clear filters</Button>}
       </div>

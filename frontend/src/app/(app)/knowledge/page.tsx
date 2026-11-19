@@ -2,7 +2,7 @@
 import { ChevronRight, Download, FileText, Globe, Link2, Loader2, Plus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ReactNode, Suspense, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, buttonClass, cx, Drawer, Field, Input, Modal, NumberInput, Segmented, Select, SettingRow, Spinner, Table, Textarea, Toggle } from "@/components/ui";
+import { Alert, Badge, Button, buttonClass, cx, Drawer, Field, Input, Modal, NumberInput, Select, SettingRow, Spinner, Table, Tabs, Textarea, Toggle } from "@/components/ui";
 import { api, download, fmtDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
@@ -54,15 +54,13 @@ function KnowledgeHome() {
           {can("knowledge.upload") && <Button variant="primary" onClick={() => setPanel("upload")}><Upload size={14} /> Upload file</Button>}
         </div>
       </div>
-      <div className="mb-6">
-        <Segmented active={view} onChange={setView} items={[
-          { key: "sources", label: "Sources" },
-          ...(can("knowledge.approve") ? [{ key: "approval", label: "Approvals", count: waiting }] : []),
-          { key: "sizing", label: "Sizing rules" },
-          { key: "search", label: "Test search" },
-        ]} />
-      </div>
-      {view === "sources" && <Sources key={refresh} initialSource={params.get("source")} onNewSection={() => setPanel("section")} />}
+      <Tabs active={view} onChange={setView} tabs={[
+        { key: "sources", label: "Sources" },
+        ...(can("knowledge.approve") ? [{ key: "approval", label: waiting ? `Approvals (${waiting})` : "Approvals" }] : []),
+        { key: "sizing", label: "Sizing rules" },
+        { key: "search", label: "Test search" },
+      ]} />
+      {view === "sources" && <Sources key={refresh} initialSource={params.get("source")} onNewSection={() => setPanel("section")} onAdd={setPanel} />}
       {view === "approval" && <Approvals onChanged={() => pending.reload()} />}
       {view === "sizing" && <Sizing />}
       {view === "search" && <TestSearch />}
@@ -71,13 +69,25 @@ function KnowledgeHome() {
   );
 }
 
-function Sources({ initialSource, onNewSection }: { initialSource?: string | null; onNewSection: () => void }) {
+function EmptyState({ icon, title, text, children }: { icon: ReactNode; title: string; text: string; children?: ReactNode }) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
+      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-mono-100 text-mono-600">{icon}</span>
+      <div className="text-sm font-semibold">{title}</div>
+      <p className="max-w-sm text-sm text-muted">{text}</p>
+      {children && <div className="mt-2 flex gap-2">{children}</div>}
+    </div>
+  );
+}
+
+function Sources({ initialSource, onNewSection, onAdd }: { initialSource?: string | null; onNewSection: () => void; onAdd: (p: Panel) => void }) {
   const { can } = useSession();
   const sections = useApi<any[]>("/knowledge/sections");
-  const [section, setSection] = useState<number | null>(null);
+  const [section, setSection] = useState("");
   const [q, setQ] = useState("");
   const [state, setState] = useState("all");
-  const qs = new URLSearchParams({ ...(section ? { section_id: String(section) } : {}), ...(q.trim() ? { q: q.trim() } : {}) }).toString();
+  const [manage, setManage] = useState(false);
+  const qs = new URLSearchParams({ ...(section ? { section_id: section } : {}), ...(q.trim() ? { q: q.trim() } : {}) }).toString();
   const sources = useApi<any[]>(`/knowledge/sources${qs ? `?${qs}` : ""}`, [qs]);
   const [open, setOpen] = useState<number | null>(initialSource ? Number(initialSource) : null);
 
@@ -90,83 +100,118 @@ function Sources({ initialSource, onNewSection }: { initialSource?: string | nul
   }, [busy, qs]);
 
   const all = sources.data || [];
-  const counts = useMemo(() => ({
-    all: all.length,
-    approved: all.filter((s) => sourceState(s).label === "Approved").length,
-    awaiting: all.filter((s) => sourceState(s).label === "Awaiting approval").length,
-    failed: all.filter((s) => s.ingest_status === "Failed").length,
-  }), [all]);
-  const shown = all.filter((s) => state === "all" || (state === "approved" && sourceState(s).label === "Approved")
-    || (state === "awaiting" && sourceState(s).label === "Awaiting approval") || (state === "failed" && s.ingest_status === "Failed"));
-  const total = (s: any) => Object.values(s.counts as Record<string, number>).reduce((a, b) => a + b, 0);
-  const current = (sections.data || []).find((s) => s.id === section);
+  const is = (s: any, k: string) => k === "all" || (k === "approved" && sourceState(s).label === "Approved")
+    || (k === "awaiting" && sourceState(s).label === "Awaiting approval") || (k === "failed" && s.ingest_status === "Failed");
+  const tiles = [
+    { key: "all", label: "Total sources" }, { key: "approved", label: "Approved" },
+    { key: "awaiting", label: "Awaiting approval" }, { key: "failed", label: "Failed" },
+  ].map((t) => ({ ...t, n: all.filter((s) => is(s, t.key)).length }));
+  const shown = all.filter((s) => is(s, state));
+  const filtered = !!(q || section || state !== "all");
 
   return (
-    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[224px_1fr]">
-      <nav aria-label="Sections" className="flex flex-col gap-1 lg:sticky lg:top-16 lg:self-start">
-        <div className="mb-1 px-2 text-sm text-muted">Sections</div>
-        <button onClick={() => setSection(null)} className={cx("flex items-center justify-between rounded px-2 py-1 text-left text-sm", !section ? "bg-mono-100 font-semibold" : "text-mono-700 hover:bg-offwhite")}>
-          <span>All sources</span><span className="tabular-nums text-muted">{(sections.data || []).reduce((a, s) => a + total(s), 0)}</span>
-        </button>
-        {(sections.data || []).map((s) => (
-          <button key={s.id} onClick={() => setSection(s.id)} title={s.description}
-            className={cx("flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-sm", section === s.id ? "bg-mono-100 font-semibold" : "text-mono-700 hover:bg-offwhite", !s.enabled && "text-muted")}>
-            <span className="truncate">{s.name}</span><span className="tabular-nums text-muted">{total(s) || ""}</span>
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {tiles.map((t) => (
+          <button key={t.key} onClick={() => setState(t.key)} aria-pressed={state === t.key}
+            className={cx("rounded border px-4 py-3 text-left transition-colors", state === t.key ? "border-black" : "border-lightborder hover:border-mono-400")}>
+            <div className="text-sm text-muted">{t.label}</div>
+            <div className={cx("mt-1 text-h4 tabular-nums", t.key === "failed" && t.n > 0 && "text-error")}>{t.n}</div>
           </button>
         ))}
-        {can("knowledge.manage_sections") && <div className="mt-2 px-2"><Button variant="ghost" onClick={onNewSection}><Plus size={14} /> New section</Button></div>}
-      </nav>
+      </div>
 
-      <section className="min-w-0">
-        <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">{current ? current.name : "All sources"}</h2>
-            {current?.description && <p className="text-sm text-muted">{current.description}</p>}
-          </div>
-        </div>
-        <div className="mb-3 mt-3 flex flex-wrap items-center justify-between gap-3">
-          <Segmented active={state} onChange={setState} items={[
-            { key: "all", label: "All", count: counts.all }, { key: "approved", label: "Approved", count: counts.approved },
-            { key: "awaiting", label: "Awaiting approval", count: counts.awaiting }, { key: "failed", label: "Failed", count: counts.failed },
-          ]} />
+      <div>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <Select className="w-56" value={section} onChange={(e) => setSection(e.target.value)}
+            options={[{ value: "", label: "All sections" }, ...(sections.data || []).map((s) => ({ value: String(s.id), label: s.name }))]} />
           <div className="relative w-full max-w-sm">
             <Search size={14} className="absolute left-2 top-2 text-muted" />
             <Input className="pl-8" placeholder="Search by title" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
+          {filtered && <Button variant="ghost" onClick={() => { setQ(""); setSection(""); setState("all"); }}>Clear</Button>}
+          <div className="ml-auto">{can("knowledge.manage_sections") && <Button variant="ghost" onClick={() => setManage(true)}>Manage sections</Button>}</div>
         </div>
 
-        {sources.loading && !sources.data ? <Spinner /> : shown.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 rounded border border-dashed border-border px-6 py-12 text-center">
-            <FileText size={24} className="text-muted" />
-            <div className="text-sm font-semibold">{q || state !== "all" ? "No sources match" : "No sources here yet"}</div>
-            <p className="max-w-sm text-sm text-muted">{q || state !== "all" ? "Try a different search or filter." : "Upload product documents or register documentation URLs. Sources become searchable once they are approved."}</p>
-          </div>
-        ) : (
-          <ul className="border-t border-lightborder">
-            {shown.map((s) => (
-              <li key={s.id}>
-                <button onClick={() => setOpen(s.id)} className="flex w-full items-center gap-3 border-b border-lightborder px-2 py-3 text-left hover:bg-offwhite">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">
-                    {s.kind === "url" ? <Globe size={16} /> : <FileText size={16} />}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold">{s.title}</span>
-                    <span className="block truncate text-sm text-muted">
-                      {[!section && s.section, s.product !== "Both" ? `${s.product}${s.product_version ? ` ${s.product_version}` : ""}` : s.product_version,
-                        s.kind === "url" ? "Web page" : s.document_type, s.label, `Updated ${fmtDate(s.updated_at || s.created_at)}`].filter(Boolean).join(" · ")}
-                    </span>
-                  </span>
-                  {s.duplicate_of && <span className="text-sm text-warning">Duplicate</span>}
-                  <span className="shrink-0"><StateLabel s={s} /></span>
-                  <ChevronRight size={16} className="shrink-0 text-muted" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <div className="rounded border border-lightborder">
+          {sources.loading && !sources.data ? <div className="p-6"><Spinner /></div> : shown.length === 0 ? (
+            filtered
+              ? <EmptyState icon={<Search size={20} />} title="No sources match" text="Try another section, status or search term." />
+              : <EmptyState icon={<FileText size={20} />} title="Add your first source" text="Upload product documents or add documentation URLs. They are processed automatically and become searchable once approved.">
+                  {can("knowledge.register_url") && <Button onClick={() => onAdd("url")}><Link2 size={14} /> Add URL</Button>}
+                  {can("knowledge.upload") && <Button variant="primary" onClick={() => onAdd("upload")}><Upload size={14} /> Upload file</Button>}
+                </EmptyState>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-lightborder text-left text-mono-600">
+                  <th className="px-4 py-2 font-semibold">Name</th>
+                  <th className="px-4 py-2 font-semibold">Section</th>
+                  <th className="px-4 py-2 font-semibold">Product</th>
+                  <th className="px-4 py-2 font-semibold">Status</th>
+                  <th className="px-4 py-2 font-semibold">Updated</th>
+                  <th className="w-8 px-2 py-2"><span className="sr-only">Open</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((s) => (
+                  <tr key={s.id} onClick={() => setOpen(s.id)} className="cursor-pointer border-b border-lightborder last:border-b-0 hover:bg-offwhite">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">{s.kind === "url" ? <Globe size={16} /> : <FileText size={16} />}</span>
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold">{s.title}</div>
+                          <div className="truncate text-muted">{s.kind === "url" ? "Web page" : s.document_type || "Document"}{s.duplicate_of && " · possible duplicate"}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-mono-700">{s.section}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-mono-700">{s.product}{s.product_version && ` ${s.product_version}`}</td>
+                    <td className="whitespace-nowrap px-4 py-3"><StateLabel s={s} /></td>
+                    <td className="whitespace-nowrap px-4 py-3 text-muted">{fmtDate(s.updated_at || s.created_at)}</td>
+                    <td className="px-2 py-3 text-muted"><ChevronRight size={16} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
       <SourceDrawer id={open} onClose={() => setOpen(null)} onChanged={() => { sources.reload(); sections.reload(); }} />
+      <SectionsDrawer open={manage} sections={sections.data || []} onClose={() => setManage(false)}
+        onNew={() => { setManage(false); onNewSection(); }} onChanged={() => sections.reload()} />
     </div>
+  );
+}
+
+const PRIORITY_NAMES: Record<number, string> = { 1: "Current documentation", 2: "Internal knowledge", 3: "Past submissions" };
+
+function SectionsDrawer({ open, sections, onClose, onNew, onChanged }: { open: boolean; sections: any[]; onClose: () => void; onNew: () => void; onChanged: () => void }) {
+  const [err, setErr] = useState("");
+  const total = (s: any) => Object.values(s.counts as Record<string, number>).reduce((a, b) => a + b, 0);
+  async function toggle(s: any, enabled: boolean) {
+    try {
+      await api.patch(`/knowledge/sections/${s.id}`, { name: s.name, description: s.description, used_by: s.used_by, priority: s.priority, enabled, sort: 100 });
+      onChanged();
+    } catch (e) { setErr((e as Error).message); }
+  }
+  return (
+    <Drawer open={open} title="Sections" subtitle="Sections organise sources, set who can read them and decide which source wins when answers disagree."
+      onClose={onClose} footer={<><Button variant="ghost" onClick={onClose}>Close</Button><Button variant="primary" onClick={onNew}><Plus size={14} /> New section</Button></>}>
+      {err && <Alert tone="error">{err}</Alert>}
+      <ul className="divide-y divide-lightborder">
+        {sections.map((s) => (
+          <li key={s.id} className="flex items-start justify-between gap-4 py-3">
+            <div className="min-w-0">
+              <div className={cx("text-sm font-semibold", !s.enabled && "text-muted")}>{s.name}</div>
+              <div className="text-sm text-muted">{total(s)} {total(s) === 1 ? "source" : "sources"} · {PRIORITY_NAMES[s.priority] || `Priority ${s.priority}`}</div>
+              {s.description && <div className="text-sm text-muted">{s.description}</div>}
+            </div>
+            <Toggle label={`${s.name} enabled`} checked={s.enabled} onChange={(v) => toggle(s, v)} />
+          </li>
+        ))}
+      </ul>
+    </Drawer>
   );
 }
 
@@ -188,7 +233,7 @@ function Approvals({ onChanged }: { onChanged: () => void }) {
       <p className="text-sm text-muted">Only approved sources are used in answers. Check each document is current and official before approving.</p>
       {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
       {ready.length === 0 ? (
-        <div className="rounded border border-dashed border-border px-6 py-12 text-center text-sm text-muted">Nothing is waiting for approval.</div>
+        <div className="rounded border border-lightborder"><EmptyState icon={<FileText size={20} />} title="All caught up" text="Nothing is waiting for approval. New uploads appear here once they have been processed." /></div>
       ) : (
         <ul className="border-t border-lightborder">
           {ready.map((s) => (
@@ -434,10 +479,20 @@ function Sizing() {
   return (
     <>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-        <p className="max-w-prose text-sm text-muted">The product team&apos;s sizing guide as a rule table. Ask Motadata and RFP Intelligence answer sizing questions only from these rules; a rule applies when every input falls inside its range (lower bound included, upper bound excluded).</p>
-        {manage && <Button variant="primary" onClick={() => { setErr(""); setEdit(blank); }}><Plus size={16} /> Sizing rule</Button>}
+        <div>
+          <h2 className="text-sm font-semibold">{(data || []).length} sizing {(data || []).length === 1 ? "rule" : "rules"}</h2>
+          <p className="text-sm text-muted">Hardware sizing answers come only from these rules, taken from the product team&apos;s sizing guide.</p>
+        </div>
+        {manage && <Button variant="primary" onClick={() => { setErr(""); setEdit(blank); }}><Plus size={14} /> Add rule</Button>}
       </div>
-      <Table head={["Product", "Component", "Applies when", "Recommended hardware", "Source", ""]} empty="No sizing rules yet. Sizing questions are referred to the product team.">
+      {data && data.length === 0 ? (
+        <div className="rounded border border-lightborder">
+          <EmptyState icon={<Plus size={20} />} title="No sizing rules yet" text="Until rules are added, sizing questions are referred to the product team. Add one rule per component and size band from the sizing guide.">
+            {manage && <Button variant="primary" onClick={() => { setErr(""); setEdit(blank); }}><Plus size={14} /> Add rule</Button>}
+          </EmptyState>
+        </div>
+      ) : (
+      <Table head={["Product", "Component", "Applies when", "Recommended hardware", "Source", ""]}>
         {(data || []).map((r) => (
           <tr key={r.id}>
             <td>{r.product}{!r.active && <div><Badge>Inactive</Badge></div>}</td>
@@ -449,6 +504,7 @@ function Sizing() {
           </tr>
         ))}
       </Table>
+      )}
       <Modal open={!!edit} title={edit?.id ? "Edit sizing rule" : "New sizing rule"} onClose={() => setEdit(null)} wide>
         {edit && <div className="flex flex-col gap-6">
           {err && <Alert tone="error">{err}</Alert>}
