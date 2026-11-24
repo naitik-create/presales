@@ -40,7 +40,9 @@ Tests use `TEST_DATABASE_URL` (the `presales_test` database) and never touch the
 
 ## Server
 
-See [docs/SERVER-INSTALL.md](docs/SERVER-INSTALL.md): Windows services via NSSM, firewall, backups.
+* **Ubuntu 24.04:** [docs/UBUNTU-INSTALL.md](docs/UBUNTU-INSTALL.md). Clone to `/opt/presales`, then
+  `sudo bash scripts/ubuntu/install.sh` (systemd services, Nginx, PostgreSQL 18, nightly backup).
+* **Windows Server:** [docs/SERVER-INSTALL.md](docs/SERVER-INSTALL.md): Windows services via NSSM, firewall, backups.
 
 ## Layout
 

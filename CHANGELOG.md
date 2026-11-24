@@ -5,6 +5,13 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 
 ## Unreleased
 
+### Added
+- Ubuntu 24.04 deployment: `scripts/ubuntu/install.sh` (PostgreSQL 18 + pgvector, Node.js 22, LibreOffice, Tesseract,
+  systemd services for API, workers and web, Nginx on port 80 with /api routed straight to the API, firewall rules,
+  nightly backup), `update.sh` (backup, pull or check out a release, reinstall, migrate, restart), `backup.sh` and
+  `restore.sh` (also restores Windows laptop backups and can carry over the API-key encryption key), and
+  `docs/UBUNTU-INSTALL.md`.
+
 ### Changed
 - Ask Motadata redesigned as a modern assistant: full-height layout with a slim conversation list (New chat,
   recent conversations, delete on hover); a welcome screen with suggested questions; a growing composer with the
