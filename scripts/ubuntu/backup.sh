@@ -15,7 +15,8 @@ DEST="$TARGET/$STAMP"
 install -d -m 700 "$DEST"
 
 STORAGE=$(grep -E '^LOCAL_STORAGE_PATH=' "$ENV_FILE" | cut -d= -f2-)
-sudo -u postgres pg_dump --format=custom --file=/tmp/presales-$STAMP.dump presales
+PG_PORT=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | sed -E 's#.*@[^:/]+:([0-9]+)/.*#\1#')
+sudo -u postgres pg_dump -p "$PG_PORT" --format=custom --file=/tmp/presales-$STAMP.dump presales
 mv /tmp/presales-$STAMP.dump "$DEST/presales.dump"
 if [[ -d "$STORAGE" ]]; then
   (cd "$STORAGE" && zip -qr "$DEST/storage.zip" .)

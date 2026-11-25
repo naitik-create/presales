@@ -54,6 +54,24 @@ fi
 apt-get install -y -q "postgresql-${PG_VERSION}" "postgresql-${PG_VERSION}-pgvector"
 systemctl enable --now postgresql
 
+# The app gets its own PostgreSQL 18 cluster. If another PostgreSQL already uses 5432 (for example a
+# PostgreSQL 16 used by other software), Ubuntu does not create the 18 cluster, so create it on the next free port.
+# Existing clusters are never changed.
+CLUSTER=$(pg_lsclusters -h | awk -v v="$PG_VERSION" '$1==v && $2=="main"')
+if [[ -z "$CLUSTER" ]]; then
+  port=5432
+  while [[ -n "$(ss -ltnH "sport = :$port")" ]]; do port=$((port + 1)); done
+  say "Creating a PostgreSQL ${PG_VERSION} cluster for this application on port ${port}"
+  pg_createcluster "$PG_VERSION" main --port "$port" --start
+fi
+PG_PORT=$(pg_lsclusters -h | awk -v v="$PG_VERSION" '$1==v && $2=="main" {print $3}')
+pg_ctlcluster "$PG_VERSION" main start 2>/dev/null || true
+systemctl enable "postgresql@${PG_VERSION}-main" >/dev/null 2>&1 || true
+[[ "$(pg_lsclusters -h | awk -v v="$PG_VERSION" '$1==v && $2=="main" {print $4}')" == "online" ]] \
+  || fail "PostgreSQL ${PG_VERSION} did not start. See /var/log/postgresql/postgresql-${PG_VERSION}-main.log"
+echo "PostgreSQL ${PG_VERSION} cluster is online on port ${PG_PORT}"
+PSQL=(sudo -u postgres psql -p "$PG_PORT")
+
 NODE_MAJOR=$(node -v 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/' || echo 0)
 if [[ "${NODE_MAJOR:-0}" -lt 20 ]]; then
   say "Installing Node.js 22 LTS"
@@ -78,17 +96,19 @@ if [[ -f "$ENV_FILE" ]]; then
 else
   DB_PASS=$(rand 32)
 fi
-sudo -u postgres psql -v ON_ERROR_STOP=1 -q <<SQL
+"${PSQL[@]}" -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'presales_app') THEN
     CREATE ROLE presales_app LOGIN PASSWORD '${DB_PASS}';
+  ELSE
+    ALTER ROLE presales_app LOGIN PASSWORD '${DB_PASS}';
   END IF;
 END\$\$;
 SQL
-if [[ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='presales'")" != "1" ]]; then
-  sudo -u postgres createdb -O presales_app presales
+if [[ "$("${PSQL[@]}" -tAc "SELECT 1 FROM pg_database WHERE datname='presales'")" != "1" ]]; then
+  sudo -u postgres createdb -p "$PG_PORT" -O presales_app presales
 fi
-sudo -u postgres psql -q -d presales -c "CREATE EXTENSION IF NOT EXISTS vector;"
+"${PSQL[@]}" -q -d presales -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # ---------------------------------------------------------------- python
 say "Installing the backend (Python)"
@@ -105,7 +125,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 APP_ENV=production
 APP_NAME=Motadata Presales Intelligence Platform
 APP_SECRET_KEY=${SECRET}
-DATABASE_URL=postgresql+psycopg://presales_app:${DB_PASS}@localhost:5432/presales
+DATABASE_URL=postgresql+psycopg://presales_app:${DB_PASS}@localhost:${PG_PORT}/presales
 # Encrypts API keys saved in Administration > API keys. Back this file up:
 # without this key the stored API keys cannot be decrypted.
 SECRETS_ENCRYPTION_KEY=${FERNET}

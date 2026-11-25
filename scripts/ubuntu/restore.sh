@@ -21,15 +21,16 @@ read -r -p "This REPLACES the current database and files with the backup. Type R
 echo "== Stopping services"
 systemctl stop presales-web presales-api 'presales-worker@*' || true
 
-echo "== Restoring the database"
-sudo -u postgres psql -q -c "DROP DATABASE IF EXISTS presales WITH (FORCE);"
-sudo -u postgres createdb -O presales_app presales
-sudo -u postgres psql -q -d presales -c "CREATE EXTENSION IF NOT EXISTS vector;"
+PG_PORT=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | sed -E 's#.*@[^:/]+:([0-9]+)/.*#\1#')
+echo "== Restoring the database (PostgreSQL port $PG_PORT)"
+sudo -u postgres psql -p "$PG_PORT" -q -c "DROP DATABASE IF EXISTS presales WITH (FORCE);"
+sudo -u postgres createdb -p "$PG_PORT" -O presales_app presales
+sudo -u postgres psql -p "$PG_PORT" -q -d presales -c "CREATE EXTENSION IF NOT EXISTS vector;"
 cp "$SRC/presales.dump" /tmp/presales-restore.dump && chmod 644 /tmp/presales-restore.dump
-sudo -u postgres pg_restore --no-owner --role=presales_app -d presales /tmp/presales-restore.dump || \
+sudo -u postgres pg_restore -p "$PG_PORT" --no-owner --role=presales_app -d presales /tmp/presales-restore.dump || \
   echo "pg_restore reported warnings (an existing 'vector' extension is expected and harmless)"
 rm -f /tmp/presales-restore.dump
-sudo -u postgres psql -q -d presales -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO presales_app; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO presales_app;"
+sudo -u postgres psql -p "$PG_PORT" -q -d presales -c "GRANT ALL ON ALL TABLES IN SCHEMA public TO presales_app; GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO presales_app;"
 
 if [[ -f "$SRC/storage.zip" ]]; then
   echo "== Restoring files"
