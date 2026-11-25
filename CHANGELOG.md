@@ -6,6 +6,9 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 ## Unreleased
 
 ### Added
+- Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, branch and pull-request workflow, migration
+  rules, conventions), `.github/CODEOWNERS`, a pull-request checklist, and GitHub Actions checks on every pull request
+  (backend tests on PostgreSQL 18 with pgvector, single migration head, frontend type check and build).
 - Ubuntu 24.04 deployment: `scripts/ubuntu/install.sh` (PostgreSQL 18 + pgvector, Node.js 22, LibreOffice, Tesseract,
   systemd services for API, workers and web, Nginx on port 80 with /api routed straight to the API, firewall rules,
   nightly backup), `update.sh` (backup, pull or check out a release, reinstall, migrate, restart), `backup.sh` and
