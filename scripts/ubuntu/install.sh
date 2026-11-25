@@ -7,6 +7,7 @@
 # Installs: PostgreSQL 18 + pgvector, Python venv, Node.js 22, LibreOffice, Tesseract, Nginx,
 # systemd services (presales-api, presales-worker@1..N, presales-web) and a nightly backup.
 set -euo pipefail
+trap 'printf "\n\033[31mERROR: the installer stopped at line %s: %s\033[0m\nFix the problem above and run the installer again; it is safe to repeat.\n" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 APP_USER="presales"
 DATA_DIR="/var/lib/presales"
@@ -22,6 +23,8 @@ FRONTEND="$APP_DIR/frontend"
 ENV_FILE="$BACKEND/.env"
 
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+# Random letters and digits. (Not "tr </dev/urandom | head": with pipefail, tr's SIGPIPE ends the script silently.)
+rand() { python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range($1)))"; }
 fail() { printf '\n\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || fail "Run with sudo: sudo bash scripts/ubuntu/install.sh"
@@ -73,7 +76,7 @@ if [[ -f "$ENV_FILE" ]]; then
   DB_URL=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2-)
   DB_PASS=$(sed -E 's#^[^:]+://[^:]+:([^@]+)@.*#\1#' <<<"$DB_URL")
 else
-  DB_PASS=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)
+  DB_PASS=$(rand 32)
 fi
 sudo -u postgres psql -v ON_ERROR_STOP=1 -q <<SQL
 DO \$\$BEGIN
@@ -82,7 +85,7 @@ DO \$\$BEGIN
   END IF;
 END\$\$;
 SQL
-if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='presales'" | grep -q 1; then
+if [[ "$(sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='presales'")" != "1" ]]; then
   sudo -u postgres createdb -O presales_app presales
 fi
 sudo -u postgres psql -q -d presales -c "CREATE EXTENSION IF NOT EXISTS vector;"
@@ -96,7 +99,7 @@ sudo -u "$APP_USER" "$BACKEND/.venv/bin/pip" install -q -r "$BACKEND/requirement
 # ---------------------------------------------------------------- configuration
 if [[ ! -f "$ENV_FILE" ]]; then
   say "Writing backend/.env"
-  SECRET=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48)
+  SECRET=$(rand 48)
   FERNET=$("$BACKEND/.venv/bin/python" -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
   cat > "$ENV_FILE" <<ENV
 APP_ENV=production
@@ -267,7 +270,7 @@ systemctl reload nginx || systemctl restart nginx
 say "Firewall"
 ufw allow OpenSSH >/dev/null
 ufw allow 'Nginx HTTP' >/dev/null
-if ufw status | grep -q "Status: active"; then
+if [[ "$(ufw status)" == *"Status: active"* ]]; then
   echo "ufw is active: SSH and HTTP (80) are allowed."
 else
   echo "ufw is not active. Rules for SSH and HTTP are added; turn it on with: sudo ufw enable"
