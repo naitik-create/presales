@@ -1,6 +1,6 @@
 # Working on the Presales Intelligence Platform
 
-This guide is for everyone who changes the code. Read it once before your first pull request.
+This guide is for everyone who changes the code. Read it once before your first upload.
 
 ## Who owns what
 
@@ -9,12 +9,11 @@ This guide is for everyone who changes the code. Read it once before your first 
 | RFP Intelligence | Teammate | `backend/app/modules/rfp`, `backend/app/models/rfp.py`, `frontend/src/app/(app)/rfp`, `backend/app/exports/templates.py`, `frontend/src/components/Templates.tsx` |
 | Knowledge Hub, document parsing | Teammate | `backend/app/modules/knowledge`, `backend/app/models/knowledge.py`, `backend/app/parsing`, `frontend/src/app/(app)/knowledge` |
 | Ask Motadata, Demo Intelligence, Team Scorecard, Dashboard, Administration, sign-in | Naitik | `backend/app/modules/{ask,demo,scorecard,dashboard,admin,auth,branding,search,customers}` and their frontend pages |
-| **Shared foundations** | Naitik (review required) | `backend/app/core`, `backend/app/ai`, `backend/app/models/core.py`, `backend/alembic`, `frontend/src/components/ui.tsx`, `frontend/tailwind.config.ts`, `scripts`, `.github` |
+| **Shared foundations** | Naitik (tell him before changing) | `backend/app/core`, `backend/app/ai`, `backend/app/models/core.py`, `backend/alembic`, `frontend/src/components/ui.tsx`, `frontend/tailwind.config.ts`, `scripts`, `.github` |
 
-`.github/CODEOWNERS` makes GitHub ask the right person to review automatically.
 
 **Shared code affects every module.** If your change needs something in a shared folder (a new UI component, a change
-to Knowledge Hub search in `app/ai/retrieval.py`, a new permission), say so in the pull request or agree it first.
+to Knowledge Hub search in `app/ai/retrieval.py`, a new permission), tell the other person first.
 Knowledge Hub search is used by Ask Motadata, RFP Intelligence and Demo Intelligence, so changes to what it stores or
 returns must be agreed by both owners.
 
@@ -43,31 +42,52 @@ To try AI features, add your own Claude key in Administration > API keys (it is 
 
 If Windows Smart App Control blocks a Python package, see the note on `jiter` in `backend/requirements.txt`.
 
-## Daily workflow
+## Daily workflow (everyone works on `main`)
 
-1. **Start from the latest `main`:**
-   ```powershell
-   git checkout main
-   git pull
-   git checkout -b rfp/compliance-export      # <module>/<short-description>
-   ```
-2. Make your change. Commit small, meaningful steps with a clear message, e.g. `RFP: add bulk approve to requirements`.
-3. **Before pushing, run the checks:**
-   ```powershell
-   cd backend;  .\.venv\Scripts\python.exe -m pytest -q
-   cd ..\frontend;  npx tsc --noEmit
-   ```
-4. Add one line under **Unreleased** in `CHANGELOG.md` describing the change for users.
-5. Push and open a pull request:
-   ```powershell
-   git push -u origin rfp/compliance-export
-   ```
-   GitHub shows a "Compare & pull request" button. Fill in the template, attach a screenshot for UI changes.
-6. GitHub runs the automatic checks (backend tests on PostgreSQL 18, frontend type check and build). They must be green.
-7. The owner reviews. After approval, merge with **Squash and merge** and delete the branch.
-8. Keep your branch up to date while you work: `git pull origin main` (fix any conflicts, run the checks again).
+We keep it simple: download the latest code, work, upload. The one rule: **always download the latest just before you
+upload**, so nobody overwrites anyone else's work.
 
-Branch name prefixes: `rfp/`, `knowledge/`, `ask/`, `demo/`, `scorecard/`, `admin/`, `platform/`, `fix/`.
+**Once on each laptop** (download with "rebase" so history stays tidy):
+```powershell
+git config --global pull.rebase true
+git config --global user.name "Your Name"
+git config --global user.email "<your GitHub no-reply email, from GitHub > Settings > Emails>"
+```
+
+**Every time you start working:**
+```powershell
+cd D:\Presales
+git pull
+```
+If the other person changed libraries or the database, also run:
+```powershell
+cd backend;  .\.venv\Scripts\pip.exe install -r requirements.txt;  .\.venv\Scripts\alembic.exe upgrade head
+cd ..\frontend;  npm install
+```
+
+**When you have finished a piece of work:**
+```powershell
+cd D:\Presales
+cd backend;  .\.venv\Scripts\python.exe -m pytest -q          # tests must pass
+cd ..\frontend;  npx tsc --noEmit                              # no type errors
+cd ..
+git add -A
+git status                                                     # check: no .env, no customer files
+git commit -m "RFP: add bulk approve to requirements"
+git pull                                                       # get the other person's latest work first
+git push                                                       # upload
+```
+
+* Add one line under **Unreleased** in `CHANGELOG.md` for anything users will notice.
+* Commit and push small pieces often (at least daily). Small uploads rarely clash.
+* **If `git pull` reports a conflict:** the same lines were changed by both of you. Open the files it lists, keep the
+  right version of each marked block (between `<<<<<<<` and `>>>>>>>`), then `git add -A` and `git rebase --continue`,
+  then run the tests and `git push`. If unsure, run `git rebase --abort` (nothing is lost) and ask the other person.
+* **Never use `git push --force`.** It deletes the other person's uploaded work.
+* After each upload GitHub runs the automatic checks (backend tests, frontend type check and build). If they fail you
+  get an email: fix it straight away so the other person does not download broken code. Results:
+  https://github.com/naitik-create/presales/actions
+* Tell the other person before changing shared code (`app/core`, `app/ai`, `ui.tsx`, models) — it affects every module.
 
 ## Database changes (Alembic migrations)
 
@@ -82,10 +102,10 @@ Every change to the database models needs a migration. Two people adding migrati
    ```
 3. Open the generated file in `backend/alembic/versions`, check it does only what you intended, and run
    `.\.venv\Scripts\alembic.exe upgrade head`.
-4. One migration per pull request where possible. Never edit a migration that is already on `main`; add a new one.
+4. Push a migration as soon as it is ready, and tell the other person. Never edit a migration that is already on `main`; add a new one.
 5. If the check reports two heads after `main` moved on: `alembic merge heads -m "merge"`, commit, push.
 
-Never change audit-log, scoring immutability or permission tables without the platform owner's review.
+Never change audit-log, scoring immutability or permission tables without agreeing it with the platform owner.
 
 ## Coding conventions
 
