@@ -22,7 +22,7 @@ from app.models.rfp import (RFPAgentRun, RFPComplianceResponse, RFPDocument, RFP
                             RFPWorkspace)
 from app.modules.knowledge.routes import add_pairs
 from app.modules.rfp import agents as A
-from app.modules.rfp import bidparams, boq_client, exports, hwsizing
+from app.modules.rfp import bidparams, boq_client, exports, hwsizing, stages, workflow
 from app.modules.rfp.service import compliance_digest, workspace_cost
 from app.parsing.extract import docx_to_pdf, extract
 
@@ -294,21 +294,176 @@ def agent_outputs(wid: int, cu: CurrentUser = Depends(require("rfp.view")), db: 
 
 @router.put("/agent-runs/{run_id}")
 def edit_agent_output(run_id: int, body: dict, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    """Save an edit as a new version, so earlier versions stay available."""
     run = db.get(RFPAgentRun, run_id) or _404()
-    run.edited_output = body.get("output")
-    run.approved = False
-    audit(db, cu.user, "rfp.agent_output_edited", "rfp_agent_run", run_id, agent=run.agent_key)
+    if not isinstance(body.get("output"), dict):
+        raise HTTPException(400, "output must be an object")
+    ws = _ws(db, run.workspace_id)
+    new = stages.new_version(db, ws, run.agent_key, body["output"], "edited")
+    if run.agent_key in workflow.STAGE_OF_AGENT:
+        stage = workflow.STAGE_OF_AGENT[run.agent_key]
+        stages.changed(db, ws, stage, f"{workflow.BY_KEY[stage]['label']} was edited by {_who(cu)}")
+    audit(db, cu.user, "rfp.agent_output_edited", "rfp_agent_run", new.id, agent=run.agent_key, previous=run_id)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "id": new.id}
 
 
 @router.post("/agent-runs/{run_id}/approve")
 def approve_agent_output(run_id: int, cu: CurrentUser = Depends(require("rfp.approve")), db: Session = Depends(get_db)):
     run = db.get(RFPAgentRun, run_id) or _404()
-    run.approved = True
+    if run.agent_key in workflow.STAGE_OF_AGENT:  # review steps are approved in order on the Bid workflow tab
+        try:
+            stages.approve(db, _ws(db, run.workspace_id), workflow.STAGE_OF_AGENT[run.agent_key], _who(cu), cu.id)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    else:
+        run.approved = True
     audit(db, cu.user, "rfp.agent_output_approved", "rfp_agent_run", run_id, agent=run.agent_key)
     db.commit()
     return {"ok": True}
+
+
+# ---------- guided bid workflow: review, edit, revise with AI, approve, then download ----------
+def _who(cu: CurrentUser) -> str:
+    return cu.user.full_name or cu.user.username
+
+
+def _stage(key: str) -> dict:
+    if key not in workflow.BY_KEY:
+        raise HTTPException(404, "Unknown step")
+    return workflow.BY_KEY[key]
+
+
+@router.get("/workspaces/{wid}/workflow")
+def get_workflow(wid: int, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    return stages.overview(db, _ws(db, wid))
+
+
+@router.put("/workspaces/{wid}/stages/{key}")
+def edit_stage(wid: int, key: str, body: dict, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    """Direct edit on the review screen; saved as a new version that needs approving again."""
+    ws, s = _ws(db, wid), _stage(key)
+    if key not in workflow.DOC_STAGES:
+        raise HTTPException(400, "This step is edited in place (answers, bid parameters)")
+    run = stages.latest(db, wid, s["agent"])
+    if not run:
+        raise HTTPException(400, f"{s['label']} has not been generated yet")
+    if not isinstance(body.get("output"), dict):
+        raise HTTPException(400, "output must be an object")
+    new = stages.new_version(db, ws, s["agent"], workflow.clean_edit(key, stages.content(run), body["output"]), "edited")
+    stages.changed(db, ws, key, f"{s['label']} was edited by {_who(cu)}")
+    audit(db, cu.user, "rfp.stage_edited", "rfp_workspace", wid, stage=key, run_id=new.id)
+    db.commit()
+    return stages.overview(db, ws)
+
+
+class ReviseIn(BaseModel):
+    instruction: str
+    requirement_ids: list[int] = []
+
+
+@router.post("/workspaces/{wid}/stages/{key}/revise")
+def revise_stage(wid: int, key: str, body: ReviseIn, cu: CurrentUser = Depends(require("rfp.edit")),
+                 db: Session = Depends(get_db)):
+    """Ask the AI to change this step; the result comes back as a draft to accept or discard."""
+    ws, s = _ws(db, wid), _stage(key)
+    if key not in workflow.REVISABLE:
+        raise HTTPException(400, f"{s['label']} is edited directly")
+    instruction = body.instruction.strip()
+    if len(instruction) < 3:
+        raise HTTPException(400, "Say what should change")
+    if key == "compliance":
+        if not body.requirement_ids:
+            raise HTTPException(400, "Select the requirements to revise")
+        if len(body.requirement_ids) > stages.MAX_COMPLIANCE_REVISE:
+            raise HTTPException(400, f"Revise at most {stages.MAX_COMPLIANCE_REVISE} requirements at a time")
+    elif not stages.latest(db, wid, s["agent"]):
+        raise HTTPException(400, f"{s['label']} has not been generated yet")
+    job = _enqueue_rfp(db, "rfp.revise", ws, cu, stage=key, instruction=instruction[:4000],
+                       requirement_ids=body.requirement_ids, by=_who(cu))
+    audit(db, cu.user, "rfp.stage_revise_requested", "rfp_workspace", wid, stage=key, instruction=instruction[:500])
+    db.commit()
+    return {"job_id": job.id}
+
+
+@router.post("/workspaces/{wid}/stages/{key}/draft/accept")
+def accept_draft(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    ws, s = _ws(db, wid), _stage(key)
+    draft = stages.latest(db, wid, workflow.DRAFT_PREFIX + key) or _404()
+    skipped = 0
+    if key == "compliance":
+        for a in draft.output.get("answers") or []:
+            c = db.scalar(select(RFPComplianceResponse).where(RFPComplianceResponse.requirement_id == a["requirement_id"]))
+            if c is None:
+                c = RFPComplianceResponse(requirement_id=a["requirement_id"])
+                db.add(c)
+            elif c.approved and not cu.has("rfp.approve"):
+                skipped += 1
+                continue
+            for k, v in a["after"].items():
+                setattr(c, k, v)
+            c.approved, c.approved_by, c.approved_at = False, None, None
+    else:
+        run = stages.latest(db, wid, s["agent"])
+        if not run or run.id != draft.output.get("base_run_id"):
+            raise HTTPException(409, f"{s['label']} changed after this revision was made. Discard it and ask again.")
+        stages.new_version(db, ws, s["agent"], draft.output["proposal"], "revised")
+        stages.changed(db, ws, key, f"{s['label']} was revised ({_who(cu)}: {draft.output.get('instruction', '')[:120]})")
+    db.delete(draft)
+    audit(db, cu.user, "rfp.stage_revision_accepted", "rfp_workspace", wid, stage=key, skipped=skipped)
+    db.commit()
+    return {**stages.overview(db, ws), "skipped": skipped}
+
+
+@router.post("/workspaces/{wid}/stages/{key}/draft/discard")
+def discard_draft(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    ws = _ws(db, wid)
+    _stage(key)
+    stages.drop_draft(db, wid, key)
+    audit(db, cu.user, "rfp.stage_revision_discarded", "rfp_workspace", wid, stage=key)
+    db.commit()
+    return stages.overview(db, ws)
+
+
+@router.post("/workspaces/{wid}/stages/{key}/approve")
+def approve_stage(wid: int, key: str, body: dict | None = None, cu: CurrentUser = Depends(require("rfp.approve")),
+                  db: Session = Depends(get_db)):
+    """{"approved": true} approves the step and opens its downloads; false reopens it (and the approved steps built
+    on it are marked as needing review)."""
+    ws = _ws(db, wid)
+    _stage(key)
+    approved = (body or {}).get("approved", True)
+    try:
+        if approved:
+            stages.approve(db, ws, key, _who(cu), cu.id)
+        else:
+            stages.reopen(db, ws, key, _who(cu))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit(db, cu.user, "rfp.stage_approved" if approved else "rfp.stage_reopened", "rfp_workspace", wid, stage=key)
+    db.commit()
+    return stages.overview(db, ws)
+
+
+@router.get("/workspaces/{wid}/stages/{key}/versions")
+def stage_versions(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    _ws(db, wid)
+    s = _stage(key)
+    return stages.versions(db, wid, s["agent"]) if s["agent"] else []
+
+
+@router.post("/workspaces/{wid}/stages/{key}/versions/{run_id}/restore")
+def restore_version(wid: int, key: str, run_id: int, cu: CurrentUser = Depends(require("rfp.edit")),
+                    db: Session = Depends(get_db)):
+    ws, s = _ws(db, wid), _stage(key)
+    old = db.get(RFPAgentRun, run_id)
+    if not old or old.workspace_id != wid or old.agent_key != s["agent"] or key not in workflow.DOC_STAGES:
+        raise HTTPException(404, "Version not found")
+    stages.new_version(db, ws, s["agent"], stages.content(old), "restored")
+    stages.changed(db, ws, key, f"{s['label']}: an earlier version was restored by {_who(cu)}")
+    audit(db, cu.user, "rfp.stage_version_restored", "rfp_workspace", wid, stage=key, run_id=run_id)
+    db.commit()
+    return stages.overview(db, ws)
 
 
 @router.post("/workspaces/{wid}/sizing")
@@ -399,19 +554,21 @@ def save_bid_parameters(wid: int, body: dict, cu: CurrentUser = Depends(require(
 
 
 @router.post("/workspaces/{wid}/bid-parameters/confirm")
-def confirm_bid_parameters(wid: int, body: dict | None = None, cu: CurrentUser = Depends(require("rfp.edit")),
+def confirm_bid_parameters(wid: int, body: dict | None = None, cu: CurrentUser = Depends(require("rfp.approve")),
                            db: Session = Depends(get_db)):
+    """Confirming the bid parameters is approving the Sizing and BOQ step of the bid workflow."""
     ws = _ws(db, wid)
     run = _params_run(db, wid)
     if not run:
         raise HTTPException(400, "Save the bid parameters first")
     confirm = (body or {}).get("confirmed", True)
-    if confirm:
-        problems = [w for w in bidparams.warnings(run.output["params"]) if "will not be quoted" not in w]
-        if problems:
-            raise HTTPException(400, "Fix before confirming: " + " ".join(problems))
-    run.approved = bool(confirm)
-    run.at = utcnow()
+    try:
+        if confirm:
+            stages.approve(db, ws, "boq", _who(cu), cu.id)
+        else:
+            stages.reopen(db, ws, "boq", _who(cu))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     audit(db, cu.user, "rfp.bid_parameters_confirmed" if confirm else "rfp.bid_parameters_unlocked", "rfp_workspace", wid)
     db.commit()
     return _params_out(db, ws, run)
@@ -433,24 +590,25 @@ def _pack_out(run: RFPAgentRun) -> dict:
 
 @router.post("/workspaces/{wid}/bid-pack")
 def make_bid_pack(wid: int, cu: CurrentUser = Depends(require("rfp.export")), db: Session = Depends(get_db)):
-    """One click: every output for the confirmed bid parameters, as a versioned ZIP. No prices."""
+    """The approved steps' downloads in one versioned ZIP; steps not approved yet are listed, not included. No prices."""
     ws = _ws(db, wid)
-    bp_run = _params_run(db, wid)
-    if not bp_run or not bp_run.approved:
-        raise HTTPException(400, "Confirm the bid parameters first (Bid parameters tab)")
+    approved = {s["key"] for s in workflow.STAGES if stages.is_approved(db, wid, s["key"])}
+    if not approved:
+        raise HTTPException(400, "Approve at least one step of the bid workflow first")
     rows = db.execute(select(RFPRequirement, RFPComplianceResponse)
                       .outerjoin(RFPComplianceResponse, RFPComplianceResponse.requirement_id == RFPRequirement.id)
                       .where(RFPRequirement.workspace_id == wid, RFPRequirement.active.is_(True)).order_by(RFPRequirement.id)).all()
-    bp = bp_run.output
+    bp_run = _params_run(db, wid)
+    bp = bp_run.output if bp_run and bp_run.approved else None
     data, files = exports.bid_pack(ws.name, rows, _latest_runs(db, wid), bp,
-                                   lambda: boq_client.unpriced_boq(bidparams.boq_request(bp["params"])))
+                                   lambda: boq_client.unpriced_boq(bidparams.boq_request(bp["params"])), approved)
     n = (db.scalar(select(func.count()).select_from(RFPAgentRun)
                    .where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == BID_PACK)) or 0) + 1
-    name = f"Bid pack v{n} - {_safe(bp['params'].get('customer_name') or ws.name)}.zip"
+    name = f"Bid pack v{n} - {_safe((bp or {}).get('params', {}).get('customer_name') or ws.name)}.zip"
     f = save_file(db, data, name, "rfp_bidpack", cu.id, "application/zip", allowed={".zip"})
     run = RFPAgentRun(workspace_id=wid, agent_key=BID_PACK, revision=ws.revision, approved=True,
                       output={"file_id": f.id, "file_name": f.original_name, "size": len(data), "files": files,
-                              "params_run_id": bp_run.id, "by": cu.user.full_name or cu.user.username})
+                              "params_run_id": bp_run.id if bp else None, "by": _who(cu)})
     db.add(run)
     audit(db, cu.user, "rfp.bid_pack_generated", "rfp_workspace", wid, file_id=f.id,
           included=sum(1 for x in files if x["included"]), skipped=sum(1 for x in files if not x["included"]))
@@ -609,10 +767,22 @@ def export_proposal(pid: int, fmt: str = "docx", cu: CurrentUser = Depends(requi
 @router.get("/workspaces/{wid}/export")
 def export(wid: int, kind: str = "compliance", cu: CurrentUser = Depends(require("rfp.export")), db: Session = Depends(get_db)):
     ws = _ws(db, wid)
+    blocked = stages.export_blocked(db, wid, kind)
+    if blocked:
+        raise HTTPException(400, blocked)
     rows = db.execute(select(RFPRequirement, RFPComplianceResponse)
                       .outerjoin(RFPComplianceResponse, RFPComplianceResponse.requirement_id == RFPRequirement.id)
                       .where(RFPRequirement.workspace_id == wid, RFPRequirement.active.is_(True)).order_by(RFPRequirement.id)).all()
-    if kind == "compliance":
+    if kind == "synopsis":
+        analysis = _latest_runs(db, wid).get("analysis") or {}
+        data, mime, name = exports.synopsis_docx(ws.name, analysis), DOCX, f"Synopsis - {_safe(ws.name)}.docx"
+    elif kind == "considerations":
+        cons = _latest_runs(db, wid).get("considerations") or {}
+        data, mime, name = exports.considerations_docx(ws.name, cons), DOCX, f"Key considerations - {_safe(ws.name)}.docx"
+    elif kind == "considerations_text":
+        cons = _latest_runs(db, wid).get("considerations") or {}
+        return {"text": workflow.considerations_text(ws.name, cons)}
+    elif kind == "compliance":
         data, mime, name = exports.compliance_sheet(ws.name, rows), XLSX, f"Compliance - {_safe(ws.name)}.xlsx"
     elif kind == "internal":
         data, mime, name = exports.internal_workbook(ws.name, rows, _latest_runs(db, wid)), XLSX, f"RFP workspace - {_safe(ws.name)}.xlsx"

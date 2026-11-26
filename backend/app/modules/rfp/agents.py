@@ -147,6 +147,46 @@ Then summarise: modules_in_scope (with the requirement numbers or references as 
 customer_prerequisites, out_of_scope items, and motadata_gaps (requirements in Motadata's area that are non-compliant
 or need validation). Base everything on the requirement text and the sources; do not guess capabilities."""
 
+CONSIDERATION_CATEGORIES = ["Eligibility / PQ", "OEM / MAF", "Commercial and payment", "Penalty / SLA / LD",
+                            "Motadata product gap", "Partner dependency", "Customer dependency", "Deviation to take",
+                            "Timeline", "Submission / documents", "Other"]
+CONSIDERATION_OWNERS = ["Presales", "Sales", "Partner / SI", "Management", "Product team", "Commercial / legal"]
+CONSIDERATIONS_SCHEMA = _obj({
+    "bid_view": _obj({"recommendation": {"type": "string", "enum": ["Go", "Go with conditions", "Needs discussion", "No-go"]},
+                      "reason": S}),
+    "items": {"type": "array", "items": _obj({
+        "category": {"type": "string", "enum": CONSIDERATION_CATEGORIES},
+        "consideration": S, "impact": {"type": "string", "enum": ["High", "Medium", "Low"]}, "ref": S, "action": S,
+        "owner": {"type": "string", "enum": CONSIDERATION_OWNERS}})}})
+CONSIDERATIONS_SYSTEM = """You prepare the key considerations for a bid by Motadata (software OEM for ObserveOps and
+ServiceOps, bidding through a partner / system integrator). You get the reviewed bid synopsis (tender facts, red flags,
+dates), the reviewed Motadata scope summary, the risk analysis, PQ/TQ gaps, the compliance position and Motadata's own
+knowledge (standard deviations, exclusions, partner scope).
+
+List what the bid team must take care of before deciding and submitting: eligibility and OEM / MAF conditions Motadata
+or the partner may not meet, commercial and payment terms, penalties, SLA and liquidated damages, Motadata product gaps,
+what the partner must supply, what the customer must provide, deviations Motadata should take, timeline pressure, and
+documents to arrange. For each give the RFP reference, the impact on the bid, the action to take and who owns it.
+Merge duplicates; most important first; at most 20. Base everything on the material supplied; do not invent figures.
+bid_view is an indicative recommendation for the bid / no-bid discussion with a one or two sentence reason."""
+
+REVISE_SYSTEM = """You revise one step of an RFP bid review on the presales team's instruction.
+You get the current content of the step as JSON and the instruction. Change only what the instruction asks for and keep
+everything else exactly as it is, including wording, order and references. Where the instruction needs facts from the
+RFP or the knowledge supplied, take them only from that material and give the reference. Return the complete revised
+content in the same structure. The rules the step was originally written under follow.
+
+"""
+
+SCOPE_REVISE_SCHEMA = _obj({k: v for k, v in SCOPE_SCHEMA["properties"].items() if k != "matrix"}
+                           | {"matrix_changes": SCOPE_SCHEMA["properties"]["matrix"]})
+SCOPE_REVISE_NOTE = """For the requirement matrix, return in matrix_changes only the rows the instruction changes (with
+the requirement number exactly as given); rows you leave out stay as they are. Return the summary lists in full."""
+
+COMPLIANCE_REVISE_NOTE = """The team has reviewed these answers and gives an instruction below. Rewrite the answers
+accordingly, still using only the sources supplied; where the instruction asserts something the sources do not support,
+follow the instruction but say so in validation_remarks."""
+
 PROPOSAL_SCHEMA =_obj({"sections": {"type": "array", "items": _obj({"placeholder": S, "content": S})}})
 PROPOSAL_SYSTEM = """Write technical proposal content for each placeholder of the selected template, from the workspace
 material supplied. Follow the style and structure of the sample documents where given, but take every fact only from the
@@ -163,6 +203,9 @@ DOC_AGENTS = {
     "boq": ("boq_licensing", BOQ_SCHEMA, BOQ_SYSTEM, True),
     "synopsis": ("executive_synopsis", SYNOPSIS_SCHEMA, SYNOPSIS_SYSTEM, False),
     "prebid": ("prebid_query", PREBID_SCHEMA, PREBID_SYSTEM, False),
+    # Also on the RFP analysis agent's settings; works from the reviewed outputs, not the full RFP text.
+    "considerations": ("rfp_analysis", CONSIDERATIONS_SCHEMA, CONSIDERATIONS_SYSTEM, True),
 }
-DOC_AGENT_LABELS = {"analysis": "RFP analysis", "scope": "Motadata scope","architecture": "Architecture and sizing inputs", "risk": "Risk and gap analysis",
-                    "pqtq": "PQ/TQ", "boq": "BOQ and licensing inputs", "synopsis": "Executive synopsis", "prebid": "Pre-bid queries"}
+DOC_AGENT_LABELS = {"analysis": "RFP analysis", "scope": "Motadata scope", "architecture": "Architecture and sizing inputs",
+                    "risk": "Risk and gap analysis", "pqtq": "PQ/TQ", "boq": "BOQ and licensing inputs",
+                    "synopsis": "Executive synopsis", "prebid": "Pre-bid queries", "considerations": "Key considerations"}

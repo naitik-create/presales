@@ -166,14 +166,14 @@ def test_bid_pack_zip():
     def sw_fail():
         raise boq_client.BoqError("Cannot reach the BOQ Generator")
 
-    data, files = exports.bid_pack("WS", rows, runs, bp, sw_fail)
+    data, files = exports.bid_pack("WS", rows, runs, bp, sw_fail)  # every step approved
     z = zipfile.ZipFile(io.BytesIO(data))
     names = set(z.namelist())
-    assert "01 Bid synopsis and RFP analysis.docx" in names and "06 Unpriced HW BOQ.xlsx" in names
-    assert "07 Unpriced SW BOQ.xlsx" not in names and "02 Motadata scope matrix.xlsx" not in names
+    assert "1 Synopsis.docx" in names and "6 Unpriced HW BOQ.xlsx" in names
+    assert "6 Unpriced SW BOQ.xlsx" not in names and "2 Scope matrix.xlsx" not in names
     status = {f["name"]: f for f in files}
-    assert status["07 Unpriced SW BOQ.xlsx"]["note"] == "Cannot reach the BOQ Generator"
-    assert status["02 Motadata scope matrix.xlsx"]["note"] == "Motadata scope has not been run"
+    assert status["6 Unpriced SW BOQ.xlsx"]["note"] == "Cannot reach the BOQ Generator"
+    assert status["2 Scope matrix.xlsx"]["note"] == "Motadata scope has not been run"
     readme = z.read("README.txt").decode()
     assert "No prices are included" in readme and "customer_name: ACME" in readme
     for n in names:  # nothing we build carries formulas
@@ -181,4 +181,4 @@ def test_bid_pack_zip():
             wb = load_workbook(io.BytesIO(z.read(n)))
             assert not any(isinstance(c.value, str) and c.value.startswith("=") for ws in wb for r in ws.iter_rows() for c in r)
     data2, files2 = exports.bid_pack("WS", rows, runs, bp, lambda: _sheet({"B3": "Product Name"}))
-    assert "07 Unpriced SW BOQ.xlsx" in zipfile.ZipFile(io.BytesIO(data2)).namelist()
+    assert "6 Unpriced SW BOQ.xlsx" in zipfile.ZipFile(io.BytesIO(data2)).namelist()

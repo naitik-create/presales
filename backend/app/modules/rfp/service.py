@@ -1,4 +1,5 @@
 """RFP processing pipeline (§8.3-8.9). Runs in the 'rfp' queue so concurrency and queue limits apply."""
+import json
 from difflib import SequenceMatcher
 
 from sqlalchemy import delete, func, select
@@ -21,6 +22,7 @@ from app.parsing.extract import extract
 
 WINDOW_CHARS = 40_000  # requirement extraction works section by section in windows of this size
 DOC_AGENT_LIMIT = 600_000  # above this the document-level agents run per window and results are merged
+FULL_RUN = ["analysis", "scope", "architecture", "risk", "pqtq", "boq", "synopsis", "prebid", "considerations"]
 RFP_SECTIONS = ["specifications", "datasheets", "prerequisites", "architecture_and_deployment", "integrations",
                 "licensing", "online_documentation", "hardware_requirements_and_sizing"]
 
@@ -110,19 +112,24 @@ def run_compliance(db: Session, ws: RFPWorkspace, reqs: list[RFPRequirement], ct
             if not r:
                 continue
             hits, past = lookup[str(r.id)]
-            cites = [h.citation() for h in hits if h.id in a["source_ids"]]
-            reused = [x for x in past if x.id in a["source_ids"]]
-            cites += [{"id": x.id, "kind": "submitted_rfp", "customer": x.customer, "submitted_on": x.submitted_on,
-                       "product_version": x.product_version, "pair_id": x.pair_id} for x in reused]
-            origin = "submitted_rfp" if reused and not any(h.id in a["source_ids"] for h in hits) else "ai"
-            _upsert_response(db, r, {"status": a["status"], "response": a["proposed_response"], "explanation": a["explanation"],
-                                     "evidence": a["evidence"], "sources": cites, "validation_remarks": a["validation_remarks"],
-                                     "origin": origin,
-                                     "origin_detail": {"reused_from": [{"customer": x.customer, "date": x.submitted_on,
-                                                                        "product_version": x.product_version} for x in reused]}})
+            _upsert_response(db, r, answer_values(a, hits, past))
         db.commit()
         ctx.progress(start_pct + int((end_pct - start_pct) * min(1, (i + 6) / max(1, len(todo)))),
                      f"Compliance answers: {min(i + 6, len(todo))} of {len(todo)}")
+
+
+def answer_values(a: dict, hits: list, past: list) -> dict:
+    """Compliance answer fields from one model answer, with citations and where a reused answer came from."""
+    cites = [h.citation() for h in hits if h.id in a["source_ids"]]
+    reused = [x for x in past if x.id in a["source_ids"]]
+    cites += [{"id": x.id, "kind": "submitted_rfp", "customer": x.customer, "submitted_on": x.submitted_on,
+               "product_version": x.product_version, "pair_id": x.pair_id} for x in reused]
+    origin = "submitted_rfp" if reused and not any(h.id in a["source_ids"] for h in hits) else "ai"
+    return {"status": a["status"], "response": a["proposed_response"], "explanation": a["explanation"],
+            "evidence": a["evidence"], "sources": cites, "validation_remarks": a["validation_remarks"], "origin": origin,
+            "origin_detail": {"reused_from": [{"customer": x.customer, "date": x.submitted_on,
+                                               "product_version": x.product_version} for x in reused]}}
+
 
 def _upsert_response(db: Session, r: RFPRequirement, values: dict) -> None:
     resp = db.scalar(select(RFPComplianceResponse).where(RFPComplianceResponse.requirement_id == r.id))
@@ -181,9 +188,62 @@ def run_scope(db: Session, ws: RFPWorkspace, job: Job) -> dict:
     return merged
 
 
+def _latest(db: Session, wid: int, key: str) -> dict:
+    run = db.scalar(select(RFPAgentRun).where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == key)
+                    .order_by(RFPAgentRun.id.desc()))
+    return (run.edited_output or run.output) if run else {}
+
+
+def considerations_material(db: Session, ws: RFPWorkspace) -> str:
+    """What the key considerations are built from: the reviewed synopsis and scope (latest versions, including the
+    team's edits), risks, PQ/TQ gaps and the compliance position."""
+    analysis, scope = _latest(db, ws.id, "analysis"), _latest(db, ws.id, "scope")
+    risk, pqtq = _latest(db, ws.id, "risk"), _latest(db, ws.id, "pqtq")
+    counts = dict(db.execute(select(RFPComplianceResponse.status, func.count())
+                             .join(RFPRequirement, RFPRequirement.id == RFPComplianceResponse.requirement_id)
+                             .where(RFPRequirement.workspace_id == ws.id, RFPRequirement.active.is_(True))
+                             .group_by(RFPComplianceResponse.status)).all())
+    weak = db.execute(select(RFPRequirement, RFPComplianceResponse)
+                      .join(RFPComplianceResponse, RFPComplianceResponse.requirement_id == RFPRequirement.id)
+                      .where(RFPRequirement.workspace_id == ws.id, RFPRequirement.active.is_(True),
+                             RFPComplianceResponse.status.in_(["Non-Compliant", "Partially Compliant",
+                                                               "Needs Product Validation"]))
+                      .order_by(RFPRequirement.id).limit(80)).all()
+    parts = {
+        "bid_synopsis": {k: analysis.get(k) for k in ("bid_facts", "red_flags", "dates", "mandatory_conditions",
+                                                      "missing_information", "submission_requirements")},
+        "scope": {k: scope.get(k) for k in ("modules_in_scope", "partner_items", "customer_prerequisites", "out_of_scope",
+                                            "motadata_gaps", "owner_counts")},
+        "risks": risk.get("items"),
+        "pq_tq_missing": [{"criterion": x.get("criterion"), "ref": x.get("ref"), "missing": x.get("missing_items")}
+                          for x in pqtq.get("items") or [] if x.get("missing_items")],
+        "compliance_counts": counts,
+        "weak_requirements": [f"{r.number} [{r.source_ref}] {' '.join(r.text.split())[:250]} => {c.status}"
+                              + (f" ({c.validation_remarks[:150]})" if c.validation_remarks else "") for r, c in weak],
+    }
+    return json.dumps(parts, ensure_ascii=False, default=str)
+
+
+def run_considerations(db: Session, ws: RFPWorkspace, job: Job) -> dict:
+    agent_key, schema, system, _ = A.DOC_AGENTS["considerations"]
+    allowed = set(db.scalars(select(KnowledgeSection.key)))
+    hits = retrieval.search(db, "Motadata standard deviations exclusions commercial terms partner responsibilities "
+                                "OEM eligibility MAF", allowed, sections=SCOPE_SECTIONS, top_k=6)
+    out = ai.call(db, agent_key, system=system,
+                  user=f"<bid_material>\n{considerations_material(db, ws)}\n</bid_material>\n"
+                       f"<knowledge>\n{retrieval.format_hits(hits)}\n</knowledge>",
+                  schema=schema, user_id=job.created_by, ref_type="rfp_workspace", ref_id=ws.id, job_id=job.id)
+    order = {"High": 0, "Medium": 1, "Low": 2}
+    out["items"] = sorted(out.get("items") or [], key=lambda x: order.get(x.get("impact"), 3))
+    out["citations"] = [h.citation() for h in hits]
+    return out
+
+
 def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
     if key == "scope":
         return run_scope(db, ws, job)
+    if key == "considerations":
+        return run_considerations(db, ws, job)
     agent_key, schema, system, uses_kb = A.DOC_AGENTS[key]
     parts = full_text(db, ws)
     extra = ""
@@ -263,8 +323,10 @@ def process(db: Session, job: Job, ctx: JobContext) -> dict:
     db.commit()
     ctx.progress(42, f"{len(new)} requirements identified")
     run_compliance(db, ws, new, ctx, job)
-    for i, key in enumerate(["analysis", "scope", "architecture", "risk", "pqtq", "boq", "synopsis", "prebid"]):
-        ctx.progress(85 + i * 2, f"Running {A.DOC_AGENT_LABELS[key]}")
+    from app.modules.rfp import stages
+    stages.reset_state(db, ws.id)  # fresh analysis: every review step starts again
+    for i, key in enumerate(FULL_RUN):
+        ctx.progress(85 + int(i * 1.5), f"Running {A.DOC_AGENT_LABELS[key]}")
         store_agent_run(db, ws, key, run_doc_agent(db, ws, key, job), job)
         db.commit()
     ws.status = "Awaiting Review"
@@ -287,6 +349,10 @@ def rerun_agent(db: Session, job: Job, ctx: JobContext) -> dict:
         run_compliance(db, ws, list(db.scalars(q)), ctx, job, 5, 95)
     else:
         store_agent_run(db, ws, key, run_doc_agent(db, ws, key, job), job)
+        from app.modules.rfp import stages, workflow
+        if key in workflow.STAGE_OF_AGENT:
+            stage = workflow.STAGE_OF_AGENT[key]
+            stages.changed(db, ws, stage, f"{workflow.BY_KEY[stage]['label']} was regenerated")
     db.commit()
     return {"agent": key}
 
@@ -358,9 +424,13 @@ def corrigendum(db: Session, job: Job, ctx: JobContext) -> dict:
     embed_requirements(db, changed_reqs)
     db.commit()
     run_compliance(db, ws, changed_reqs, ctx, job, 50, 85)
-    for key in ("analysis", "scope", "risk", "synopsis", "prebid"):
+    for key in ("analysis", "scope", "risk", "synopsis", "prebid", "considerations"):
         store_agent_run(db, ws, key, run_doc_agent(db, ws, key, job), job)
         db.commit()
+    from app.modules.rfp import stages
+    why = f"{'Revised RFP' if mode == 'revised' else 'Corrigendum'} processed (revision {ws.revision})"
+    stages.flag(db, ws.id, ["synopsis", "scope", "considerations", "prebid"], why)
+    stages.changed(db, ws, "synopsis", why)
     ws.status = "Awaiting Review"
     db.commit()
     if job.created_by:

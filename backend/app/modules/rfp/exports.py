@@ -29,6 +29,11 @@ def internal_workbook(ws_name: str, rows: list[tuple], runs: dict) -> bytes:
                           [22, 60, 10, 20, 50])
     if "scope" in runs:
         brand.write_table(wb, "Scope", SCOPE_HEADERS, _scope_rows(rows, runs["scope"]), SCOPE_WIDTHS)
+    if "considerations" in runs:
+        brand.write_table(wb, "Key considerations", ["Impact", "Category", "Consideration", "Reference", "Action", "Owner"],
+                          [[x.get("impact", ""), x.get("category", ""), x.get("consideration", ""), x.get("ref", ""),
+                            x.get("action", ""), x.get("owner", "")] for x in runs["considerations"].get("items", [])],
+                          [9, 22, 60, 18, 50, 18])
     if "analysis" in runs:
         brand.write_table(wb, "Bid synopsis", ["Item", "Value", "Reference"],
                           [[f["item"], f["value"], f["ref"]] for f in bidpack.facts_list(runs["analysis"].get("bid_facts"))],
@@ -138,34 +143,44 @@ def hw_boq_workbook(ws_name: str, params: dict, sizing: dict) -> bytes:
     return brand.workbook_bytes(wb)
 
 
-def bid_pack(ws_name: str, rows: list[tuple], runs: dict, bp: dict, sw_boq) -> tuple[bytes, list[dict]]:
-    """All bid outputs in one ZIP. sw_boq() returns the unpriced SW BOQ bytes or raises; a failed part is listed in
-    the manifest and README instead of stopping the pack. Returns (zip bytes, manifest)."""
+def bid_pack(ws_name: str, rows: list[tuple], runs: dict, bp: dict | None, sw_boq,
+             approved: set[str] | None = None) -> tuple[bytes, list[dict]]:
+    """The approved steps' downloads in one ZIP. A step that is not approved yet is listed in the README instead of
+    included. sw_boq() returns the unpriced SW BOQ bytes or raises; a failed part is listed rather than stopping the
+    pack. bp is the confirmed bid parameters (None while the Sizing and BOQ step is not approved).
+    Returns (zip bytes, manifest)."""
     import zipfile
     from datetime import datetime
 
-    p, sizing = bp["params"], bp["sizing"]
+    approved = {"synopsis", "scope", "considerations", "prebid", "compliance", "boq"} if approved is None else approved
+    p = (bp or {}).get("params") or {}
+    sizing = (bp or {}).get("sizing") or {}
     who = p.get("customer_name") or ws_name
-    parts: list[tuple[str, object]] = [
-        ("01 Bid synopsis and RFP analysis.docx", lambda: report_docx(ws_name, runs)),
-        ("02 Motadata scope matrix.xlsx", (lambda: scope_workbook(ws_name, rows, runs["scope"])) if runs.get("scope")
+    no_hw = sizing.get("error") or "No hardware sizing"
+    parts: list[tuple[str, str, object]] = [
+        ("synopsis", "1 Synopsis.docx", (lambda: synopsis_docx(ws_name, runs["analysis"])) if runs.get("analysis")
+         else "RFP analysis has not been run"),
+        ("scope", "2 Scope matrix.xlsx", (lambda: scope_workbook(ws_name, rows, runs["scope"])) if runs.get("scope")
          else "Motadata scope has not been run"),
-        ("03 Pre-bid queries (tender format).xlsx", (lambda: prebid_sheet(ws_name, runs["prebid"]))
+        ("considerations", "3 Key considerations.docx", (lambda: considerations_docx(ws_name, runs["considerations"]))
+         if runs.get("considerations") else "Key considerations have not been run"),
+        ("prebid", "4 Pre-bid queries (tender format).xlsx", (lambda: prebid_sheet(ws_name, runs["prebid"]))
          if (runs.get("prebid") or {}).get("queries") else "Pre-bid queries have not been run"),
-        ("03 Pre-bid queries (tender format).docx", (lambda: prebid_docx(ws_name, runs["prebid"]))
+        ("prebid", "4 Pre-bid queries (tender format).docx", (lambda: prebid_docx(ws_name, runs["prebid"]))
          if (runs.get("prebid") or {}).get("queries") else "Pre-bid queries have not been run"),
-        ("04 Compliance statement.xlsx", (lambda: compliance_sheet(ws_name, rows)) if rows else "No requirements yet"),
-        ("05 Hardware sizing.xlsx", (lambda: hw_sizing_workbook(ws_name, sizing)) if sizing.get("sites")
-         else sizing.get("error") or "No hardware sizing"),
-        ("06 Unpriced HW BOQ.xlsx", (lambda: hw_boq_workbook(ws_name, p, sizing)) if sizing.get("sites")
-         else sizing.get("error") or "No hardware sizing"),
-        ("07 Unpriced SW BOQ.xlsx", sw_boq),
-        ("Internal/RFP workspace (internal).xlsx", lambda: internal_workbook(ws_name, rows, runs)),
+        ("compliance", "5 Compliance statement.xlsx", (lambda: compliance_sheet(ws_name, rows)) if rows
+         else "No requirements yet"),
+        ("boq", "6 Hardware sizing.xlsx", (lambda: hw_sizing_workbook(ws_name, sizing)) if sizing.get("sites") else no_hw),
+        ("boq", "6 Unpriced HW BOQ.xlsx", (lambda: hw_boq_workbook(ws_name, p, sizing)) if sizing.get("sites") else no_hw),
+        ("boq", "6 Unpriced SW BOQ.xlsx", sw_boq),
     ]
     manifest: list[dict] = []
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for name, make in parts:
+        for stage, name, make in parts:
+            if stage not in approved:
+                manifest.append({"name": name, "included": False, "note": "Step not approved yet"})
+                continue
             if isinstance(make, str):
                 manifest.append({"name": name, "included": False, "note": make})
                 continue
@@ -178,8 +193,9 @@ def bid_pack(ws_name: str, rows: list[tuple], runs: dict, bp: dict, sw_boq) -> t
                  "No prices are included in this pack.", "", "Files:"]
         lines += [f"  [{'x' if m['included'] else ' '}] {m['name']}" + (f"  - not included: {m['note']}" if not m["included"] else "")
                   for m in manifest]
-        lines += ["", "Confirmed bid parameters:"]
-        lines += [f"  {k}: {v}" for k, v in p.items()]
+        if p:
+            lines += ["", "Confirmed bid parameters:"]
+            lines += [f"  {k}: {v}" for k, v in p.items()]
         z.writestr("README.txt", "\n".join(lines) + "\n")
     return buf.getvalue(), manifest
 
@@ -225,10 +241,51 @@ def _bid_synopsis(doc, analysis: dict) -> None:
                         [[f["issue"], f["impact"], f["ref"]] for f in analysis["red_flags"]])
 
 
+def _lines(doc, heading: str, items) -> None:
+    if items:
+        doc.add_heading(heading, level=3)
+        for it in items:
+            doc.add_paragraph(str(it), style="List Bullet")
+
+
+def synopsis_docx(ws_name: str, analysis: dict) -> bytes:
+    """Step 1 download: the reviewed bid synopsis."""
+    doc = brand.new_document(f"Bid synopsis - {ws_name}")
+    if analysis.get("summary"):
+        doc.add_heading("Summary", level=1)
+        doc.add_paragraph(analysis["summary"])
+    _bid_synopsis(doc, analysis)
+    for key, heading in (("objectives", "Objectives"), ("scope", "Scope of work"),
+                         ("submission_requirements", "Submission requirements"), ("milestones", "Milestones"),
+                         ("mandatory_conditions", "Mandatory conditions"), ("missing_information", "Missing information")):
+        _lines(doc, heading, analysis.get(key))
+    return brand.document_bytes(doc)
+
+
+def _considerations(doc, out: dict) -> None:
+    view = out.get("bid_view") or {}
+    if view.get("recommendation"):
+        doc.add_paragraph(f"Indicative bid view: {view['recommendation']}. {view.get('reason', '')}".strip())
+    brand.add_table(doc, ["#", "Impact", "Category", "Consideration", "Reference", "Action", "Owner"],
+                    [[i, x.get("impact", ""), x.get("category", ""), x.get("consideration", ""), x.get("ref", ""),
+                      x.get("action", ""), x.get("owner", "")] for i, x in enumerate(out.get("items") or [], start=1)])
+
+
+def considerations_docx(ws_name: str, out: dict) -> bytes:
+    """Step 3 download: what the bid team must take care of."""
+    doc = brand.new_document(f"Key considerations - {ws_name}")
+    _landscape(doc)
+    _considerations(doc, out)
+    return brand.document_bytes(doc)
+
+
 def report_docx(ws_name: str, runs: dict) -> bytes:
     doc = brand.new_document(f"RFP analysis - {ws_name}")
     if runs.get("analysis", {}).get("bid_facts"):
         _bid_synopsis(doc, runs["analysis"])
+    if runs.get("considerations"):
+        doc.add_heading("Key considerations", level=1)
+        _considerations(doc, runs["considerations"])
     for key in ("synopsis", "analysis", "scope", "architecture", "risk", "pqtq", "boq", "prebid"):
         out = runs.get(key)
         if not out:

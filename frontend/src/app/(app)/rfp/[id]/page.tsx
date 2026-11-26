@@ -5,22 +5,26 @@ import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Progress, 
 import { api, download, fmtDate, money } from "@/lib/api";
 import { useApi, useJobPoll } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
+import { BidWorkflow } from "./workflow";
 
 const STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"];
+// Synopsis, scope, key considerations and pre-bid queries are reviewed on the Bid workflow tab.
 const AGENT_LABELS: Record<string, string> = {
-  synopsis: "Executive synopsis", analysis: "RFP analysis", scope: "Motadata scope", architecture: "Architecture and sizing inputs", risk: "Risk and gap analysis",
-  pqtq: "PQ/TQ", boq: "BOQ and licensing inputs", prebid: "Pre-bid queries",
+  synopsis: "Executive synopsis", architecture: "Architecture and sizing inputs", risk: "Risk and gap analysis",
+  pqtq: "PQ/TQ", boq: "BOQ and licensing inputs",
 };
 
 export default function WorkspacePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const ws = useApi<any>(`/rfp/workspaces/${id}`);
-  const [tab, setTab] = useState("documents");
+  const [tab, setTab] = useState<string | null>(null);
+  const [step, setStep] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ tone: "error" | "success" | "info"; text: string } | null>(null);
   const running = ws.data?.job && ["Queued", "Processing"].includes(ws.data.job.status) ? ws.data.job.id : null;
   const job = useJobPoll(running, () => ws.reload());
   if (!ws.data) return <Spinner />;
   const w = ws.data;
+  const current = tab || (w.status !== "Uploaded" ? "workflow" : "documents");
   const run = async (fn: () => Promise<any>, ok: string) => {
     try { await fn(); setMsg({ tone: "success", text: ok }); ws.reload(); } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); }
   };
@@ -35,16 +39,18 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
           <div className="mb-2 text-sm">{job.message}</div><Progress value={job.progress} /></Card></div>
       )}
       {w.job?.status === "Failed" && <div className="mb-4"><Alert tone="error">Last job failed: {w.job.error}</Alert></div>}
-      <Tabs active={tab} onChange={setTab} tabs={[
-        { key: "documents", label: "Documents" }, { key: "requirements", label: "Requirements and answers" },
-        { key: "analysis", label: "Analysis" }, { key: "params", label: "Bid parameters" }, { key: "proposal", label: "Proposal" },
+      <Tabs active={current} onChange={setTab} tabs={[
+        { key: "documents", label: "Documents" }, { key: "workflow", label: "Bid workflow" },
+        { key: "analysis", label: "Other analysis" }, { key: "proposal", label: "Proposal" },
         { key: "export", label: "Export and submit" }]} />
-      {tab === "documents" && <Documents w={w} reload={ws.reload} run={run} busy={!!running} />}
-      {tab === "requirements" && <Requirements wid={id} busy={!!running} run={run} />}
-      {tab === "analysis" && <Analysis wid={id} busy={!!running} run={run} />}
-      {tab === "params" && <BidParameters wid={id} />}
-      {tab === "proposal" && <Proposal w={w} run={run} busy={!!running} />}
-      {tab === "export" && <ExportTab w={w} run={run} />}
+      {current === "documents" && <Documents w={w} reload={ws.reload} run={run} busy={!!running} />}
+      {current === "workflow" && <BidWorkflow key={`${w.job?.id}-${w.job?.status}`} wid={id} step={step} setStep={setStep}
+        busy={!!running} onJob={ws.reload}
+        renderCompliance={(onRevise, reloadWf) => <Requirements wid={id} busy={!!running} run={run} onRevise={onRevise} onChanged={reloadWf} />}
+        renderBoq={(reloadWf) => <BidParameters wid={id} onSaved={reloadWf} />} />}
+      {current === "analysis" && <Analysis wid={id} busy={!!running} run={run} />}
+      {current === "proposal" && <Proposal w={w} run={run} busy={!!running} />}
+      {current === "export" && <ExportTab w={w} run={run} />}
     </>
   );
 }
@@ -88,7 +94,7 @@ function Documents({ w, reload, run, busy }: any) {
   );
 }
 
-function Requirements({ wid, busy, run }: any) {
+function Requirements({ wid, busy, run, onRevise, onChanged }: any) {
   const { can } = useSession();
   const [filter, setFilter] = useState({ status: "", change: "", approved: "", q: "" });
   const qs = new URLSearchParams(Object.entries(filter).filter(([, v]) => v) as [string, string][]).toString();
@@ -97,7 +103,8 @@ function Requirements({ wid, busy, run }: any) {
   const [open, setOpen] = useState<any | null>(null);
   const agents = useApi<any>(`/rfp/workspaces/${wid}/agents`);
   const scopeBy: Record<string, any> = Object.fromEntries((agents.data?.scope?.output?.matrix || []).map((m: any) => [m.number, m]));
-  const approve = (ids: number[], approved = true) => run(() => api.post(`/rfp/workspaces/${wid}/approve`, { requirement_ids: ids, approved }), `${ids.length} answer(s) updated`).then(reload);
+  const approve = (ids: number[], approved = true) => run(() => api.post(`/rfp/workspaces/${wid}/approve`, { requirement_ids: ids, approved }), `${ids.length} answer(s) updated`)
+    .then(() => { reload(); onChanged?.(); });
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -107,6 +114,7 @@ function Requirements({ wid, busy, run }: any) {
           options={[{ value: "", label: "All" }, { value: "false", label: "Not approved" }, { value: "true", label: "Approved" }]} /></Field>
         <Field label="Search"><Input value={filter.q} onChange={(e) => setFilter({ ...filter, q: e.target.value })} /></Field>
         {can("rfp.approve") && <Button disabled={!sel.length} onClick={() => approve(sel).then(() => setSel([]))}><CheckCheck size={16} /> Approve selected ({sel.length})</Button>}
+        {can("rfp.edit") && onRevise && <Button disabled={busy || !sel.length || sel.length > 30} onClick={() => onRevise(sel)}><Sparkles size={16} /> Ask AI to change selected</Button>}
         {can("rfp.edit") && <Button disabled={busy || !sel.length} onClick={() => run(() => api.post(`/rfp/workspaces/${wid}/agents/compliance/run`, { requirement_ids: sel }), "Re-running compliance for selected")}><RefreshCw size={16} /> Re-run selected</Button>}
       </div>
       {loading ? <Spinner /> : (
@@ -128,7 +136,7 @@ function Requirements({ wid, busy, run }: any) {
           ))}
         </Table>
       )}
-      {open && <AnswerModal r={open} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); reload(); }} approve={approve} />}
+      {open && <AnswerModal r={open} onClose={() => setOpen(null)} onSaved={() => { setOpen(null); reload(); onChanged?.(); }} approve={approve} />}
     </div>
   );
 }
@@ -183,6 +191,7 @@ function Analysis({ wid, busy, run }: any) {
   if (!data) return <Spinner />;
   return (
     <div className="flex flex-col gap-4">
+      <Alert tone="info">Supporting analysis. Synopsis, scope matrix, key considerations, pre-bid queries, compliance and BOQ are reviewed and approved on the Bid workflow tab.</Alert>
       {Object.keys(AGENT_LABELS).map((k) => {
         const r = data[k];
         return (
@@ -193,11 +202,10 @@ function Analysis({ wid, busy, run }: any) {
               {r && !r.approved && can("rfp.approve") && <Button onClick={() => api.post(`/rfp/agent-runs/${r.id}/approve`).then(reload)}>Approve</Button>}
             </>}>
             {!r ? <p className="text-sm text-muted">Not run yet.</p>
-              : k === "scope" ? <Scope wid={wid} out={r.output} />
               : k === "architecture" ? <>
                   <Output value={Object.fromEntries(Object.entries(r.output).filter(([x]) => !["motadata_sizing", "motadata_inputs"].includes(x)))} />
                   {r.output.motadata_sizing && <HwSizing key={`${r.id}-${r.edited}`} wid={wid} hw={r.output.motadata_sizing} reload={reload} />}</>
-              : k === "prebid" ? <Prebid key={`${r.id}-${r.edited}`} wid={wid} r={r} reload={reload} /> : <Output value={r.output} />}
+              : <Output value={r.output} />}
           </Card>
         );
       })}
@@ -211,39 +219,22 @@ function Analysis({ wid, busy, run }: any) {
 
 /** Review screen: every figure the BOQs depend on, pre-filled from the RFP with where it came from. Confirm locks it
  *  and enables the unpriced SW BOQ (from the BOQ Generator) and HW BOQ downloads. */
-function BidParameters({ wid }: { wid: string }) {
+function BidParameters({ wid, onSaved }: { wid: string; onSaved: () => void }) {
   const { can } = useSession();
   const { data, reload } = useApi<any>(`/rfp/workspaces/${wid}/bid-parameters`);
   if (!data) return <Spinner />;
-  return <BidParametersForm key={`${data.saved}-${data.confirmed_at}-${JSON.stringify(data.params)}`} wid={wid} data={data} reload={reload} canEdit={can("rfp.edit")} canExport={can("rfp.export")} />;
+  return <BidParametersForm key={`${data.saved}-${data.confirmed}-${data.confirmed_at}-${JSON.stringify(data.params)}`} wid={wid} data={data}
+    reload={() => { reload(); onSaved(); }} canEdit={can("rfp.edit")} />;
 }
 
-/** One-click bid pack (ZIP of every output, no prices) and its version history. */
-function BidPacks({ wid, confirmed }: { wid: string; confirmed: boolean }) {
+/** History of the "All approved" ZIPs made from the Bid workflow tab. */
+function BidPacks({ wid }: { wid: string }) {
   const { can } = useSession();
   const packs = useApi<any[]>(`/rfp/workspaces/${wid}/bid-packs`);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
-  async function generate() {
-    setBusy(true); setMsg(null);
-    try {
-      const p = await api.post<any>(`/rfp/workspaces/${wid}/bid-pack`);
-      const skipped = (p.files || []).filter((f: any) => !f.included);
-      setMsg(skipped.length
-        ? { tone: "warning", text: `Bid pack ready without ${skipped.length} file(s): ${skipped.map((f: any) => `${f.name} (${f.note})`).join("; ")}` }
-        : { tone: "success", text: "Bid pack ready with all files." });
-      packs.reload();
-      await download(`/rfp/bid-packs/${p.id}/download`);
-    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setBusy(false); }
-  }
   return (
-    <Card title="Bid pack" actions={can("rfp.export") && <Button variant="primary" disabled={!confirmed || busy} onClick={generate}>
-      {busy ? <Spinner /> : <Download size={16} />} Generate bid pack</Button>}>
-      <p className="mb-2 text-sm text-muted">One ZIP: bid synopsis and analysis, scope matrix, pre-bid queries in the tender format,
-        compliance statement, hardware sizing, unpriced HW and SW BOQs, internal workbook. No prices are included.
-        {!confirmed && " Confirm the bid parameters to enable it."}</p>
-      {msg && <div className="mb-2"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
-      <Table head={["Version", "Generated", "By", "Files", ""]} empty="No bid pack generated yet.">
+    <Card title="Approved downloads (ZIP) history">
+      <p className="mb-2 text-sm text-muted">Made with “All approved (ZIP)” on the Bid workflow tab. Each holds only the steps approved at that time. No prices.</p>
+      <Table head={["Version", "Generated", "By", "Files", ""]} empty="None made yet.">
         {(packs.data || []).map((p, i, all) => (
           <tr key={p.id}><td className="font-semibold">v{all.length - i}</td><td>{fmtDate(p.at, true)}</td><td>{p.by}</td>
             <td className="text-sm">{(p.files || []).filter((f: any) => f.included).length} of {(p.files || []).length}
@@ -255,7 +246,7 @@ function BidPacks({ wid, confirmed }: { wid: string; confirmed: boolean }) {
   );
 }
 
-function BidParametersForm({ wid, data, reload, canEdit, canExport }: any) {
+function BidParametersForm({ wid, data, reload, canEdit }: any) {
   const [params, setParams] = useState<Record<string, any>>(data.params);
   const initialSizing: Record<string, string> = Object.fromEntries((data.sizing_inputs || []).map((i: any) => [i.name, String(i.value)]));
   const [sizing, setSizing] = useState<Record<string, string>>(initialSizing);
@@ -273,26 +264,18 @@ function BidParametersForm({ wid, data, reload, canEdit, canExport }: any) {
   const save = () => act(() => api.put(`/rfp/workspaces/${wid}/bid-parameters`, {
     params, sizing_inputs: Object.entries(sizing).filter(([, v]) => v !== "").map(([name, value]) => ({
       name, value: Number(value), ref: refs[name]?.ref || "Entered on review", note: refs[name]?.note || "" })) }));
-  const confirm = (confirmed: boolean) => act(() => api.post(`/rfp/workspaces/${wid}/bid-parameters/confirm`, { confirmed }));
   const hw = data.sizing;
   return (
     <div className="flex flex-col gap-4">
       {err && <Alert tone="error">{err}</Alert>}
-      {locked ? <Alert tone="success">Confirmed {fmtDate(data.confirmed_at, true)}. Unlock to change.</Alert>
-        : <Alert tone="info">Check every figure against the RFP, save, then confirm. Values marked Default were not found in the RFP.</Alert>}
-      <BidPacks wid={wid} confirmed={locked} />
+      {locked ? <Alert tone="success">Approved {fmtDate(data.confirmed_at, true)}. Reopen the step to change.</Alert>
+        : <Alert tone="info">Check every figure against the RFP and save. Approving the step locks these figures and opens the unpriced BOQ downloads. Values marked Default were not found in the RFP.</Alert>}
       {(data.warnings || []).map((w: string, i: number) => <Alert key={i} tone="warning">{w}</Alert>)}
       {(data.notes || []).map((n: string, i: number) => <Alert key={`n${i}`} tone="info">{n}</Alert>)}
       <div className="flex flex-wrap gap-2">
         {canEdit && !locked && <Button variant="primary" disabled={busy || (!dirty && data.saved)} onClick={save}>{data.saved ? "Save changes" : "Save"}</Button>}
-        {canEdit && !locked && <Button disabled={busy || dirty || !data.saved} onClick={() => confirm(true)}><CheckCheck size={16} /> Confirm</Button>}
-        {canEdit && locked && <Button disabled={busy} onClick={() => confirm(false)}>Unlock</Button>}
-        {canExport && <>
-          <Button disabled={!locked || busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=sw_boq`).catch((e: Error) => setErr(e.message))}><Download size={16} /> Unpriced SW BOQ</Button>
-          <Button disabled={!locked || busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=hw_boq`).catch((e: Error) => setErr(e.message))}><Download size={16} /> Unpriced HW BOQ</Button>
-          <Button disabled={busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=hw_sizing`).catch((e: Error) => setErr(e.message))}><Download size={16} /> HW sizing</Button>
-        </>}
-        {dirty && <span className="self-center text-sm text-muted">Unsaved changes</span>}
+        {!data.saved && !dirty && !locked && <span className="self-center text-sm text-muted">Save once to record the figures; the step can be approved after that.</span>}
+        {dirty && <span className="self-center text-sm text-muted">Unsaved changes. Save before approving.</span>}
       </div>
       {groups.map((g) => (
         <Card key={g} title={g}>
@@ -398,116 +381,6 @@ const OWNER_TONE: Record<string, "accent" | "info" | "warning" | "neutral"> = {
   Motadata: "accent", "Partner / SI": "info", Customer: "warning", Shared: "info", "Not applicable": "neutral",
 };
 
-/** Who delivers what: owner counts, Motadata modules, partner and customer items, gaps, and the per-requirement matrix. */
-function Scope({ wid, out }: { wid: string; out: any }) {
-  const { can } = useSession();
-  const [owner, setOwner] = useState("");
-  const matrix: any[] = (out.matrix || []).filter((m: any) => !owner || m.owner === owner);
-  const lists: [string, string][] = [["partner_items", "Partner / SI supplies"], ["customer_prerequisites", "Customer provides"],
-    ["out_of_scope", "Out of scope"], ["motadata_gaps", "Motadata gaps (non-compliant or to validate)"]];
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {(out.owner_counts || []).map((o: any) => (
-          <button key={o.owner} type="button" onClick={() => setOwner(owner === o.owner ? "" : o.owner)}
-            className={owner === o.owner ? "outline outline-2 outline-black rounded-full" : ""}>
-            <Badge tone={OWNER_TONE[o.owner] || "neutral"}>{o.owner}: {o.requirements}</Badge></button>
-        ))}
-        {can("rfp.export") && <Button onClick={() => download(`/rfp/workspaces/${wid}/export?kind=scope`)}><Download size={16} /> Scope matrix (Excel)</Button>}
-      </div>
-      <div>
-        <div className="text-sm font-semibold">Motadata modules in scope</div>
-        {(out.modules_in_scope || []).length ? (
-          <ul className="mt-1 flex flex-col gap-1 text-sm">
-            {out.modules_in_scope.map((m: any, i: number) => <li key={i}><Badge tone="accent">{m.product}</Badge> <b>{m.module}</b> <span className="text-muted">{m.basis}</span></li>)}
-          </ul>) : <p className="text-sm text-muted">None identified.</p>}
-      </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {lists.map(([k, label]) => (
-          <div key={k}><div className="text-sm font-semibold">{label}</div>
-            {(out[k] || []).length ? <ul className="list-disc pl-5 text-sm">{out[k].map((it: any, i: number) => (
-              <li key={i}>{it.item} {it.ref && <span className="text-muted">({it.ref})</span>}{it.note && <span className="text-muted"> · {it.note}</span>}</li>))}</ul>
-              : <p className="text-sm text-muted">None</p>}</div>
-        ))}
-      </div>
-      <details>
-        <summary className="cursor-pointer text-sm font-semibold">Requirement matrix ({matrix.length}{owner && ` · ${owner}`})</summary>
-        <Table head={["No.", "Owner", "Product", "Module", "Note"]} empty="No requirements.">
-          {matrix.map((m) => (
-            <tr key={m.number}><td className="font-semibold">{m.number}</td><td><Badge tone={OWNER_TONE[m.owner] || "neutral"}>{m.owner}</Badge></td>
-              <td>{m.product}</td><td>{m.module}</td><td className="text-sm text-muted">{m.note}</td></tr>
-          ))}
-        </Table>
-      </details>
-    </div>
-  );
-}
-
-const TOP_N = 10;
-const IMPACT_TONE: Record<string, "error" | "warning" | "neutral"> = { High: "error", Medium: "warning", Low: "neutral" };
-
-/** Ranked pre-bid queries: tick the ones to submit, reorder, save, and download in the tender's own format. */
-function Prebid({ wid, r, reload }: { wid: string; r: any; reload: () => void }) {
-  const { can } = useSession();
-  const initial = (r.output.queries || []).map((q: any, i: number) => ({ ...q, selected: "selected" in q ? q.selected : i < TOP_N }));
-  const [queries, setQueries] = useState<any[]>(initial);
-  const [dirty, setDirty] = useState(false);
-  const [err, setErr] = useState("");
-  const fmt = r.output.tender_format;
-  const picked = queries.filter((q) => q.selected).length;
-  const update = (next: any[]) => { setQueries(next); setDirty(true); };
-  const move = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= queries.length) return;
-    const next = [...queries];
-    [next[i], next[j]] = [next[j], next[i]];
-    update(next.map((q, n) => ({ ...q, rank: n + 1 })));
-  };
-  async function save() {
-    try {
-      await api.put(`/rfp/agent-runs/${r.id}`, { output: { ...r.output, queries } });
-      setDirty(false); setErr(""); reload();
-    } catch (e) { setErr((e as Error).message); }
-  }
-  return (
-    <div className="flex flex-col gap-3">
-      {err && <Alert tone="error">{err}</Alert>}
-      {fmt?.found
-        ? <Alert tone="info">Format prescribed by the RFP{fmt.ref && ` (${fmt.ref})`}: {fmt.columns.map((c: any) => c.heading).join(" | ")}
-            {fmt.instructions && <div className="mt-1">Submission: {fmt.instructions}</div>}</Alert>
-        : <Alert tone="info">The RFP prescribes no pre-bid query format, so downloads use the standard format.</Alert>}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm">{picked} of {queries.length} selected to submit{picked !== TOP_N && ` (usually ${TOP_N})`}</span>
-        {can("rfp.edit") && dirty && <Button variant="primary" onClick={save}>Save selection</Button>}
-        {can("rfp.export") && <>
-          <Button disabled={dirty} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=prebid`)}><Download size={16} /> Excel</Button>
-          <Button disabled={dirty} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=prebid_docx`)}><Download size={16} /> Word</Button>
-        </>}
-        {dirty && <span className="text-sm text-muted">Save before downloading.</span>}
-      </div>
-      <Table head={["Submit", "Rank", "Impact", "Reference", "Query", "Why it matters", ""]} empty="No queries.">
-        {queries.map((q, i) => (
-          <tr key={i} className={q.selected ? "" : "opacity-60"}>
-            <td><input type="checkbox" aria-label={`Submit query ${i + 1}`} checked={!!q.selected} disabled={!can("rfp.edit")}
-              onChange={(e) => update(queries.map((x, n) => n === i ? { ...x, selected: e.target.checked } : x))} /></td>
-            <td className="font-semibold">{q.rank ?? i + 1}</td>
-            <td>{q.impact && <Badge tone={IMPACT_TONE[q.impact] || "neutral"}>{q.impact}</Badge>}<div className="text-sm text-muted">{q.category}</div></td>
-            <td className="whitespace-nowrap text-muted">{q.ref}</td>
-            <td className="max-w-prose">{q.query}
-              {q.clause_text && <div className="mt-1 text-sm text-muted">Clause: {q.clause_text}</div>}
-              {q.suggested_change && <div className="mt-1 text-sm">Suggested change: {q.suggested_change}</div>}</td>
-            <td className="max-w-prose text-sm">{q.reason}</td>
-            <td className="whitespace-nowrap">{can("rfp.edit") && <>
-              <Button variant="ghost" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={14} /></Button>
-              <Button variant="ghost" aria-label="Move down" disabled={i === queries.length - 1} onClick={() => move(i, 1)}><ArrowDown size={14} /></Button>
-            </>}</td>
-          </tr>
-        ))}
-      </Table>
-    </div>
-  );
-}
-
 function Output({ value }: { value: any }) {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "string" || typeof value === "number") return <p className="whitespace-pre-wrap text-sm">{String(value)}</p>;
@@ -571,13 +444,14 @@ function ExportTab({ w, run }: any) {
       {can("rfp.export") && (
         <Card title="Export">
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => download(`/rfp/workspaces/${w.id}/export?kind=compliance`)}><Download size={16} /> Customer compliance sheet</Button>
             <Button onClick={() => download(`/rfp/workspaces/${w.id}/export?kind=internal`)}><Download size={16} /> Internal workbook</Button>
             <Button onClick={() => download(`/rfp/workspaces/${w.id}/export?kind=report`)}><Download size={16} /> Analysis report (Word)</Button>
             <Button onClick={() => download(`/rfp/workspaces/${w.id}/export?kind=report_pdf`)}><Download size={16} /> Analysis report (PDF)</Button>
           </div>
+          <p className="mt-2 text-sm text-muted">Internal working files with everything as it stands, approved or not. Customer-facing files are downloaded per step on the Bid workflow tab once approved.</p>
         </Card>
       )}
+      {can("rfp.export") && <BidPacks wid={w.id} />}
       {can("rfp.approve") && (
         <Card title="Mark submitted">
           <p className="mb-4 text-sm text-muted">Upload the final submitted documents on the Documents tab first. Approved requirement and response pairs are added to the Submitted RFP repository.</p>

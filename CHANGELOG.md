@@ -37,12 +37,26 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   existing download with `force_unpriced`, so SKUs, wording and T&C stay maintained there; **Unpriced HW BOQ** is built
   from the sizing. Needs `BOQ_GENERATOR_URL`, `BOQ_GENERATOR_USERNAME`, `BOQ_GENERATOR_PASSWORD` in `backend/.env`
   (see `.env.example`). Parameters are stored as an `rfp_agent_runs` row (`bid_parameters`), so no migration.
-- RFP Intelligence: **one-click bid pack**. After the bid parameters are confirmed, "Generate bid pack" builds one ZIP:
-  bid synopsis and analysis (Word), Motadata scope matrix, pre-bid queries in the tender format (Excel and Word),
-  compliance statement, hardware sizing, unpriced HW BOQ, unpriced SW BOQ, internal workbook, and a README listing
-  every file, anything left out and why, and the confirmed parameters. A part that fails (for example the BOQ
-  Generator is unreachable) is listed instead of stopping the pack. Every pack is kept as a version with who generated
-  it; downloads are audited.
+  Now step 6 of the bid workflow; approving the step confirms the parameters.
+- RFP Intelligence: **guided bid workflow** (new "Bid workflow" tab, opened by default once the RFP is analysed).
+  The bid is reviewed one step at a time on the same screen: 1 Synopsis, 2 Scope matrix, 3 Key considerations,
+  4 Pre-bid queries, 5 Compliance, 6 Sizing and BOQ. In each step the team can edit everything directly (facts, dates,
+  red flags, matrix rows, queries, considerations), or ask the AI to change it with an instruction ("make R014-R020
+  Partner / SI", "add a query on OEM turnover"); the AI changes only that step and shows a before / after list to
+  accept or discard. Compliance answers can be revised the same way for up to 30 selected requirements. Approving a
+  step opens its downloads (Synopsis Word, Scope matrix Excel, Key considerations Word and "Copy for email", pre-bid
+  queries Excel / Word in the tender format, compliance statement, HW sizing, unpriced HW and SW BOQs); before approval
+  they are refused by the API too. Steps are approved in order of dependency (key considerations and BOQ after
+  synopsis and scope; pre-bid queries after synopsis). Every edit, accepted revision or restore is a new version with
+  history and restore. When an approved step changes or is reopened, the approved steps built on it are reopened and
+  marked "Needs review" with the reason; corrigenda and revised RFPs do the same.
+- RFP Intelligence: **Key considerations** agent: what the bid team must take care of (eligibility, OEM / MAF,
+  commercial and payment terms, penalties and LD, Motadata gaps, partner and customer dependencies, deviations,
+  timeline, documents) with RFP reference, impact, action and owner, plus an indicative bid view. Built from the
+  reviewed synopsis and scope, risks, PQ/TQ gaps, weak compliance answers and Motadata's internal presales knowledge.
+  Runs in full processing and corrigenda; uses the RFP analysis agent's model settings.
+- RFP Intelligence: **All approved (ZIP)** replaces the one-click bid pack: one versioned ZIP with the approved steps'
+  downloads only; steps not yet approved are listed in the README. History on the Export and submit tab.
 - **No pricing ever leaves the platform**: besides requesting unpriced output, every file from the BOQ Generator is
   checked and refused if it holds a formula or a number in a price column (checked against the real priced and
   unpriced BOQ layouts).
@@ -56,6 +70,9 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   `docs/UBUNTU-INSTALL.md`.
 
 ### Changed
+- RFP workspace tabs: Documents, Bid workflow, Other analysis (architecture, risks, PQ/TQ, BOQ inputs, executive
+  synopsis), Proposal, Export and submit. Requirements and Bid parameters now live in workflow steps 5 and 6. Editing
+  an agent output anywhere saves a new version instead of overwriting.
 - Ask Motadata redesigned as a modern assistant: full-height layout with a slim conversation list (New chat,
   recent conversations, delete on hover); a welcome screen with suggested questions; a growing composer with the
   product choice built in (Enter to send, Shift + Enter for a new line); user questions as light bubbles; answers with
