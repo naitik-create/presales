@@ -15,6 +15,12 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   the RFP prescribes (columns and submission instructions) and the new Excel / Word downloads use exactly those columns
   (standard format when the RFP has none). On the Analysis tab, tick which queries to submit, reorder and save.
   Plan for the remaining RFP gaps: `docs/GAP-PLAN.md`.
+- RFP Intelligence: **Motadata scope**. A new analysis step classifies every requirement by owner (Motadata,
+  Partner / SI, Customer, Shared, Not applicable) and Motadata product and module, and summarises modules in scope,
+  partner items, customer prerequisites, out-of-scope items and Motadata gaps. It reads Motadata's profile (modules,
+  standard exclusions, partner scope) from the Internal presales knowledge section. Shown on the Analysis tab with owner
+  filters, as a Scope column on Requirements, in the internal workbook and report, and as a Scope matrix Excel download.
+  Runs after compliance in full processing and corrigenda; uses the RFP analysis agent's model settings.
 - Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, simple pull-work-push workflow on `main`,
   conflict handling, migration rules, conventions) and GitHub Actions checks after every push (backend tests on
   PostgreSQL 18 with pgvector, single migration head, frontend type check and build).

@@ -1,5 +1,5 @@
 """RFP agent prompts and output schemas (§8.4)."""
-from app.modules.rfp.bidpack import BID_FACTS, NOT_STATED, PREBID_CATEGORIES, PREBID_FIELDS
+from app.modules.rfp.bidpack import BID_FACTS, MODULES, NOT_STATED, PREBID_CATEGORIES, PREBID_FIELDS, SCOPE_OWNERS
 
 COMPLIANCE_STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"]
 
@@ -108,7 +108,38 @@ ServiceOps) and its bidding partner.
    (empty if it is a pure clarification); reason is internal and explains why the query matters to Motadata.
    ref combines document, page and clause for display."""
 
-PROPOSAL_SCHEMA = _obj({"sections": {"type": "array", "items": _obj({"placeholder": S, "content": S})}})
+ITEM = _obj({"item": S, "ref": S})
+SCOPE_SCHEMA = _obj({
+    "modules_in_scope": {"type": "array", "items": _obj({
+        "product": {"type": "string", "enum": list(MODULES) + ["Other"]}, "module": S, "basis": S})},
+    "partner_items": {"type": "array", "items": ITEM},
+    "customer_prerequisites": {"type": "array", "items": ITEM},
+    "out_of_scope": {"type": "array", "items": ITEM},
+    "motadata_gaps": {"type": "array", "items": _obj({"item": S, "ref": S, "note": S})},
+    "matrix": {"type": "array", "items": _obj({
+        "number": S, "owner": {"type": "string", "enum": SCOPE_OWNERS},
+        "product": {"type": "string", "enum": list(MODULES) + ["Other", ""]}, "module": S, "note": S})}})
+SCOPE_SYSTEM = f"""Map the scope of this RFP for Motadata, a software OEM selling ObserveOps and ServiceOps through a
+partner / system integrator. You get the list of requirements (number, category, reference, text, compliance status)
+and Motadata knowledge sources, which may include Motadata's own profile: modules, standard exclusions, standard
+deviations and what the partner normally supplies.
+
+For every requirement give one matrix row with the requirement number exactly as given:
+- owner: "Motadata" when Motadata software or Motadata services deliver it; "Partner / SI" for hardware, OS and
+  database licences, third-party software, cabling, data-centre work, facility management manpower, onsite resident
+  engineers unless the knowledge says Motadata provides them; "Customer" for things the buyer must provide (network
+  access, credentials, rack space, approvals); "Shared" when Motadata and the partner both have a part; "Not applicable"
+  for clauses that ask nothing technical of the bidder (legal, submission, commercial).
+- product and module: for Motadata or Shared rows, the Motadata product and module, using these names where they fit:
+{chr(10).join(f"  {p}: {', '.join(ms)}" for p, ms in MODULES.items())}
+  Leave product empty for rows that are not Motadata's.
+- note: a few words when the owner is not obvious, or when the compliance status shows Motadata cannot fully meet it.
+
+Then summarise: modules_in_scope (with the requirement numbers or references as basis), partner_items,
+customer_prerequisites, out_of_scope items, and motadata_gaps (requirements in Motadata's area that are non-compliant
+or need validation). Base everything on the requirement text and the sources; do not guess capabilities."""
+
+PROPOSAL_SCHEMA =_obj({"sections": {"type": "array", "items": _obj({"placeholder": S, "content": S})}})
 PROPOSAL_SYSTEM = """Write technical proposal content for each placeholder of the selected template, from the workspace
 material supplied. Follow the style and structure of the sample documents where given, but take every fact only from the
 workspace material and knowledge sources. Use plain paragraphs; start list items with "- "."""
@@ -116,6 +147,8 @@ workspace material and knowledge sources. Use plain paragraphs; start list items
 DOC_AGENTS = {
     # key: (agent_key, schema, system, uses_knowledge)
     "analysis": ("rfp_analysis", ANALYSIS_SCHEMA, ANALYSIS_SYSTEM, False),
+    # Uses the RFP analysis agent's model settings, so no new agent row (seed.py is shared code).
+    "scope": ("rfp_analysis", SCOPE_SCHEMA, SCOPE_SYSTEM, True),
     "architecture": ("architecture_sizing", ARCH_SCHEMA, ARCH_SYSTEM, True),
     "risk": ("risk_gap", RISK_SCHEMA, RISK_SYSTEM, False),
     "pqtq": ("pq_tq", PQTQ_SCHEMA, PQTQ_SYSTEM, True),
@@ -123,5 +156,5 @@ DOC_AGENTS = {
     "synopsis": ("executive_synopsis", SYNOPSIS_SCHEMA, SYNOPSIS_SYSTEM, False),
     "prebid": ("prebid_query", PREBID_SCHEMA, PREBID_SYSTEM, False),
 }
-DOC_AGENT_LABELS = {"analysis": "RFP analysis", "architecture": "Architecture and sizing inputs", "risk": "Risk and gap analysis",
+DOC_AGENT_LABELS = {"analysis": "RFP analysis", "scope": "Motadata scope","architecture": "Architecture and sizing inputs", "risk": "Risk and gap analysis",
                     "pqtq": "PQ/TQ", "boq": "BOQ and licensing inputs", "synopsis": "Executive synopsis", "prebid": "Pre-bid queries"}

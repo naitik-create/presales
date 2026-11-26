@@ -153,7 +153,37 @@ def compliance_digest(db: Session, ws: RFPWorkspace) -> str:
                      + (f" ({c.validation_remarks[:150]})" if c and c.validation_remarks else "") for r, c in rows)
 
 
+SCOPE_BATCH = 150  # requirements per scope call, so the matrix fits the output limit
+SCOPE_SECTIONS = ["internal_presales_knowledge", "licensing", "datasheets", "specifications", "online_documentation"]
+
+
+def run_scope(db: Session, ws: RFPWorkspace, job: Job) -> dict:
+    """Owner and module for every active requirement, plus the scope summary. Works from the requirement list and
+    compliance answers rather than the full RFP text, in batches."""
+    agent_key, schema, system, _ = A.DOC_AGENTS["scope"]
+    rows = db.execute(select(RFPRequirement, RFPComplianceResponse)
+                      .outerjoin(RFPComplianceResponse, RFPComplianceResponse.requirement_id == RFPRequirement.id)
+                      .where(RFPRequirement.workspace_id == ws.id, RFPRequirement.active.is_(True))
+                      .order_by(RFPRequirement.id)).all()
+    allowed = set(db.scalars(select(KnowledgeSection.key)))
+    hits = retrieval.search(db, "Motadata modules product scope standard exclusions deviations partner responsibilities "
+                                "what the partner supplies", allowed, sections=SCOPE_SECTIONS, top_k=10)
+    knowledge = f"<knowledge>\n{retrieval.format_hits(hits)}\n</knowledge>"
+    merged: dict = {}
+    for i in range(0, len(rows), SCOPE_BATCH):
+        listing = "\n".join(f"{r.number} | {r.category} | {r.source_file} {r.source_ref} | {' '.join(r.text.split())[:500]}"
+                            f" | {c.status if c else 'pending'}" for r, c in rows[i:i + SCOPE_BATCH])
+        out = ai.call(db, agent_key, system=system, user=f'<document name="requirements">\n{listing}\n</document>\n{knowledge}',
+                      schema=schema, user_id=job.created_by, ref_type="rfp_workspace", ref_id=ws.id, job_id=job.id)
+        bidpack.merge_outputs(merged, out)
+    bidpack.finalise_scope(merged, [r.number for r, _ in rows])
+    merged["citations"] = [h.citation() for h in hits]
+    return merged
+
+
 def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
+    if key == "scope":
+        return run_scope(db, ws, job)
     agent_key, schema, system, uses_kb = A.DOC_AGENTS[key]
     parts = full_text(db, ws)
     extra = ""
@@ -232,8 +262,8 @@ def process(db: Session, job: Job, ctx: JobContext) -> dict:
     db.commit()
     ctx.progress(42, f"{len(new)} requirements identified")
     run_compliance(db, ws, new, ctx, job)
-    for i, key in enumerate(["analysis", "architecture", "risk", "pqtq", "boq", "synopsis", "prebid"]):
-        ctx.progress(86 + i * 2, f"Running {A.DOC_AGENT_LABELS[key]}")
+    for i, key in enumerate(["analysis", "scope", "architecture", "risk", "pqtq", "boq", "synopsis", "prebid"]):
+        ctx.progress(85 + i * 2, f"Running {A.DOC_AGENT_LABELS[key]}")
         store_agent_run(db, ws, key, run_doc_agent(db, ws, key, job), job)
         db.commit()
     ws.status = "Awaiting Review"
@@ -327,7 +357,7 @@ def corrigendum(db: Session, job: Job, ctx: JobContext) -> dict:
     embed_requirements(db, changed_reqs)
     db.commit()
     run_compliance(db, ws, changed_reqs, ctx, job, 50, 85)
-    for key in ("analysis", "risk", "synopsis", "prebid"):
+    for key in ("analysis", "scope", "risk", "synopsis", "prebid"):
         store_agent_run(db, ws, key, run_doc_agent(db, ws, key, job), job)
         db.commit()
     ws.status = "Awaiting Review"

@@ -93,3 +93,39 @@ def test_report_starts_with_bid_synopsis():
     headings = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
     assert headings[0] == "Bid synopsis"
     assert doc.tables[0].rows[0].cells[0].text == "Item"
+
+
+def test_finalise_scope_one_row_per_requirement():
+    out = {"matrix": [{"number": "R002", "owner": "Not applicable", "product": "", "module": "", "note": ""},
+                      {"number": "R002", "owner": "Partner / SI", "product": "", "module": "", "note": "hardware"},
+                      {"number": "R001", "owner": "Motadata", "product": "ObserveOps", "module": "Log management", "note": ""},
+                      {"number": "R999", "owner": "Motadata", "product": "", "module": "", "note": ""}],
+           "modules_in_scope": [{"product": "ObserveOps", "module": "Log management", "basis": "R001"},
+                                {"product": "ObserveOps", "module": "log  Management", "basis": "R001 again"}],
+           "partner_items": [{"item": "Servers", "ref": "p.4"}, {"item": "servers", "ref": "p.9"}]}
+    bidpack.finalise_scope(out, ["R001", "R002", "R003"])
+    assert [m["number"] for m in out["matrix"]] == ["R001", "R002", "R003"]
+    assert out["matrix"][1]["owner"] == "Partner / SI"
+    assert out["matrix"][2]["note"].startswith("Not classified")
+    assert len(out["modules_in_scope"]) == 1 and len(out["partner_items"]) == 1
+    assert out["owner_counts"] == [{"owner": "Motadata", "requirements": 1}, {"owner": "Partner / SI", "requirements": 1},
+                                   {"owner": "Shared", "requirements": 1}]
+    assert out["motadata_gaps"] == []
+
+
+def test_scope_workbook():
+    from types import SimpleNamespace as NS
+    rows = [(NS(number="R001", text="Collect syslog", source_file="RFP.pdf", source_ref="p.5", category="Technical"),
+             NS(status="Compliant")),
+            (NS(number="R002", text="Supply servers", source_file="RFP.pdf", source_ref="p.6", category="Technical"), None)]
+    scope = bidpack.finalise_scope({"matrix": [{"number": "R001", "owner": "Motadata", "product": "ObserveOps",
+                                                "module": "Log management", "note": ""}],
+                                    "motadata_gaps": [{"item": "SOAR playbooks", "ref": "p.7", "note": "not supported"}]},
+                                   ["R001", "R002"])
+    wb = load_workbook(io.BytesIO(exports.scope_workbook("Test", rows, scope)))
+    ws = wb["Scope matrix"]
+    assert [c.value for c in ws[3]] == exports.SCOPE_HEADERS
+    assert [c.value for c in ws[4]][:8] == ["R001", "Collect syslog", "RFP.pdf p.5", "Technical", "Motadata", "ObserveOps",
+                                           "Log management", "Compliant"]
+    assert ws.cell(row=5, column=5).value == "Shared"
+    assert wb["Scope summary"].cell(row=2, column=1).value == "Motadata gap"

@@ -49,6 +49,20 @@ STANDARD_COLUMNS: list[dict] = [
     {"heading": "Suggested Change", "field": "suggested_change"},
 ]
 
+SCOPE_OWNERS = ["Motadata", "Partner / SI", "Customer", "Shared", "Not applicable"]
+
+# Module names the scope agent should use, so the matrix groups cleanly. "Other" covers anything else.
+MODULES = {
+    "ObserveOps": ["Network monitoring", "Server and application monitoring", "Virtualisation and cloud monitoring",
+                   "Database monitoring", "Log management", "Flow analytics", "APM", "Real user monitoring",
+                   "Network configuration management (NCM)", "IP address management (IPAM)", "Topology and maps",
+                   "Event correlation and AIOps", "Dashboards and reporting"],
+    "ServiceOps": ["Service desk (incident, problem, change, request)", "Service catalogue and self-service portal",
+                   "Asset management and CMDB", "Patch management", "Vulnerability management",
+                   "Software deployment and endpoint management", "Knowledge base", "Project management"],
+    "Platform": ["Platform (HA/DR, security, integrations, user management)"],
+}
+
 TOP_N = 10
 _IMPACT = {"High": 0, "Medium": 1, "Low": 2}
 
@@ -118,6 +132,34 @@ def finalise_prebid(out: dict) -> dict:
         q["selected"] = i <= TOP_N
     out["queries"] = queries
     out.setdefault("tender_format", {"found": False, "ref": "", "instructions": "", "columns": []})
+    return out
+
+
+_OWNER_ORDER = {o: i for i, o in enumerate(SCOPE_OWNERS)}
+
+
+def finalise_scope(out: dict, numbers: list[str]) -> dict:
+    """One matrix row per requirement, in requirement order; requirements the model skipped are flagged for review.
+    Summary lists from several batches are de-duplicated by item text."""
+    rows: dict[str, dict] = {}
+    for m in out.get("matrix") or []:
+        n = (m.get("number") or "").strip()
+        if n in numbers and (n not in rows or rows[n].get("owner") == "Not applicable"):
+            rows[n] = m
+    out["matrix"] = [rows.get(n) or {"number": n, "owner": "Shared", "product": "", "module": "",
+                                     "note": "Not classified - check"} for n in numbers]
+    for k in ("modules_in_scope", "partner_items", "customer_prerequisites", "out_of_scope", "motadata_gaps"):
+        seen, items = set(), []
+        for it in out.get(k) or []:
+            key = " ".join(str(it.get("module") or it.get("item") or "").lower().split())
+            if key and key not in seen:
+                seen.add(key)
+                items.append(it)
+        out[k] = items
+    counts: dict[str, int] = {}
+    for m in out["matrix"]:
+        counts[m["owner"]] = counts.get(m["owner"], 0) + 1
+    out["owner_counts"] = [{"owner": o, "requirements": counts[o]} for o in sorted(counts, key=lambda o: _OWNER_ORDER.get(o, 9))]
     return out
 
 

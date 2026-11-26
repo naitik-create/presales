@@ -454,6 +454,11 @@ def export(wid: int, kind: str = "compliance", cu: CurrentUser = Depends(require
         name = f"RFP analysis - {_safe(ws.name)}.docx"
         if kind == "report_pdf":
             data, mime, name = docx_to_pdf(data), "application/pdf", name.replace(".docx", ".pdf")
+    elif kind == "scope":
+        scope = _latest_runs(db, wid).get("scope")
+        if not scope:
+            raise HTTPException(400, "Run the Motadata scope agent first")
+        data, mime, name = exports.scope_workbook(ws.name, rows, scope), XLSX, f"Scope matrix - {_safe(ws.name)}.xlsx"
     elif kind in ("prebid", "prebid_docx"):
         prebid = _latest_runs(db, wid).get("prebid")
         if not prebid or not prebid.get("queries"):

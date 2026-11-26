@@ -25,6 +25,8 @@ def internal_workbook(ws_name: str, rows: list[tuple], runs: dict) -> bytes:
         brand.write_table(wb, "Risks", ["Category", "Description", "Impact", "Reference", "Mitigation"],
                           [[i["category"], i["description"], i["impact"], i["ref"], i["mitigation"]] for i in runs["risk"].get("items", [])],
                           [22, 60, 10, 20, 50])
+    if "scope" in runs:
+        brand.write_table(wb, "Scope", SCOPE_HEADERS, _scope_rows(rows, runs["scope"]), SCOPE_WIDTHS)
     if "analysis" in runs:
         brand.write_table(wb, "Bid synopsis", ["Item", "Value", "Reference"],
                           [[f["item"], f["value"], f["ref"]] for f in bidpack.facts_list(runs["analysis"].get("bid_facts"))],
@@ -52,6 +54,34 @@ def _cite(s: dict) -> str:
     if s.get("kind") == "submitted_rfp":
         return f"Past RFP {s.get('customer')} {s.get('submitted_on')} v{s.get('product_version')}"
     return f"{s.get('title', '')} {s.get('page', '')}".strip()
+
+
+def _scope_rows(rows: list[tuple], scope: dict) -> list[list]:
+    by_no = {m["number"]: m for m in scope.get("matrix", [])}
+    out = []
+    for r, c in rows:
+        m = by_no.get(r.number, {})
+        out.append([r.number, r.text, f"{r.source_file} {r.source_ref}".strip(), r.category, m.get("owner", ""),
+                    m.get("product", ""), m.get("module", ""), c.status if c else "", m.get("note", "")])
+    return out
+
+
+SCOPE_HEADERS = ["No.", "Requirement", "Reference", "Category", "Owner", "Product", "Module", "Compliance", "Note"]
+SCOPE_WIDTHS = [8, 70, 22, 14, 14, 13, 30, 22, 36]
+
+
+def scope_workbook(ws_name: str, rows: list[tuple], scope: dict) -> bytes:
+    wb = brand.new_workbook()
+    brand.write_table(wb, "Scope matrix", SCOPE_HEADERS, _scope_rows(rows, scope), SCOPE_WIDTHS,
+                      heading=f"Motadata scope - {ws_name}")
+    brand.write_table(wb, "Modules in scope", ["Product", "Module", "Basis"],
+                      [[m["product"], m["module"], m["basis"]] for m in scope.get("modules_in_scope", [])], [14, 40, 60])
+    summary = []
+    for key, label in (("partner_items", "Partner / SI"), ("customer_prerequisites", "Customer prerequisite"),
+                       ("out_of_scope", "Out of scope"), ("motadata_gaps", "Motadata gap")):
+        summary += [[label, it["item"], it.get("ref", ""), it.get("note", "")] for it in scope.get(key, [])]
+    brand.write_table(wb, "Scope summary", ["Type", "Item", "Reference", "Note"], summary, [22, 70, 22, 40])
+    return brand.workbook_bytes(wb)
 
 
 def prebid_sheet(ws_name: str, prebid: dict) -> bytes:
@@ -99,11 +129,13 @@ def report_docx(ws_name: str, runs: dict) -> bytes:
     doc = brand.new_document(f"RFP analysis - {ws_name}")
     if runs.get("analysis", {}).get("bid_facts"):
         _bid_synopsis(doc, runs["analysis"])
-    for key in ("synopsis", "analysis", "architecture", "risk", "pqtq", "boq", "prebid"):
+    for key in ("synopsis", "analysis", "scope", "architecture", "risk", "pqtq", "boq", "prebid"):
         out = runs.get(key)
         if not out:
             continue
         doc.add_heading(DOC_AGENT_LABELS[key], level=1)
+        if key == "scope":  # the full matrix is in the scope workbook; the report shows the summary
+            out = {k: v for k, v in out.items() if k != "matrix"}
         if key == "prebid":
             brand.add_table(doc, ["Rank", "Submit", "Impact", "Reference", "Query"],
                             [[q.get("rank", ""), "Yes" if q in bidpack.selected_queries(out) else "", q.get("impact", ""),

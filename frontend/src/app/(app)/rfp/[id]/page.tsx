@@ -8,7 +8,7 @@ import { useSession } from "@/lib/session";
 
 const STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"];
 const AGENT_LABELS: Record<string, string> = {
-  synopsis: "Executive synopsis", analysis: "RFP analysis", architecture: "Architecture and sizing inputs", risk: "Risk and gap analysis",
+  synopsis: "Executive synopsis", analysis: "RFP analysis", scope: "Motadata scope", architecture: "Architecture and sizing inputs", risk: "Risk and gap analysis",
   pqtq: "PQ/TQ", boq: "BOQ and licensing inputs", prebid: "Pre-bid queries",
 };
 
@@ -94,6 +94,8 @@ function Requirements({ wid, busy, run }: any) {
   const { data, loading, reload } = useApi<any[]>(`/rfp/workspaces/${wid}/requirements?${qs}`, [qs]);
   const [sel, setSel] = useState<number[]>([]);
   const [open, setOpen] = useState<any | null>(null);
+  const agents = useApi<any>(`/rfp/workspaces/${wid}/agents`);
+  const scopeBy: Record<string, any> = Object.fromEntries((agents.data?.scope?.output?.matrix || []).map((m: any) => [m.number, m]));
   const approve = (ids: number[], approved = true) => run(() => api.post(`/rfp/workspaces/${wid}/approve`, { requirement_ids: ids, approved }), `${ids.length} answer(s) updated`).then(reload);
   return (
     <div className="flex flex-col gap-4">
@@ -108,7 +110,7 @@ function Requirements({ wid, busy, run }: any) {
       </div>
       {loading ? <Spinner /> : (
         <Table head={[<input key="all" type="checkbox" aria-label="Select all" onChange={(e) => setSel(e.target.checked ? (data || []).map((r) => r.id) : [])} />,
-          "No.", "Requirement", "Ref", "Status", "Proposed response", "Origin", ""]} empty="No requirements yet. Analyse the RFP first.">
+          "No.", "Requirement", "Ref", "Status", "Scope", "Proposed response", "Origin", ""]} empty="No requirements yet. Analyse the RFP first.">
           {(data || []).map((r) => (
             <tr key={r.id}>
               <td><input type="checkbox" checked={sel.includes(r.id)} onChange={(e) => setSel(e.target.checked ? [...sel, r.id] : sel.filter((x) => x !== r.id))} /></td>
@@ -116,6 +118,8 @@ function Requirements({ wid, busy, run }: any) {
               <td className="max-w-prose">{r.text}</td>
               <td className="whitespace-nowrap text-muted">{r.source_file}<div>{r.source_ref}</div></td>
               <td>{r.answer ? <StatusBadge status={r.answer.status} /> : <span className="text-muted">Pending</span>}{r.answer?.approved && <div><Badge tone="success">Approved</Badge></div>}</td>
+              <td>{scopeBy[r.number] && <><Badge tone={OWNER_TONE[scopeBy[r.number].owner] || "neutral"}>{scopeBy[r.number].owner}</Badge>
+                <div className="text-sm text-muted">{scopeBy[r.number].module}</div></>}</td>
               <td className="max-w-prose">{r.answer?.response}</td>
               <td>{r.answer?.origin}{r.answer?.origin_detail?.reused_from?.map((x: any, i: number) => <div key={i} className="text-sm text-muted">{x.customer} {x.date} v{x.product_version}</div>)}</td>
               <td><Button variant="ghost" onClick={() => setOpen(r)}>Open</Button></td>
@@ -188,6 +192,7 @@ function Analysis({ wid, busy, run }: any) {
               {r && !r.approved && can("rfp.approve") && <Button onClick={() => api.post(`/rfp/agent-runs/${r.id}/approve`).then(reload)}>Approve</Button>}
             </>}>
             {!r ? <p className="text-sm text-muted">Not run yet.</p>
+              : k === "scope" ? <Scope wid={wid} out={r.output} />
               : k === "prebid" ? <Prebid key={`${r.id}-${r.edited}`} wid={wid} r={r} reload={reload} /> : <Output value={r.output} />}
           </Card>
         );
@@ -196,6 +201,55 @@ function Analysis({ wid, busy, run }: any) {
         <Textarea rows={24} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="mt-2"><Button variant="primary" onClick={() => api.put(`/rfp/agent-runs/${edit.id}`, { output: JSON.parse(text) }).then(() => { setEdit(null); reload(); })}>Save</Button></div>
       </Modal>
+    </div>
+  );
+}
+
+const OWNER_TONE: Record<string, "accent" | "info" | "warning" | "neutral"> = {
+  Motadata: "accent", "Partner / SI": "info", Customer: "warning", Shared: "info", "Not applicable": "neutral",
+};
+
+/** Who delivers what: owner counts, Motadata modules, partner and customer items, gaps, and the per-requirement matrix. */
+function Scope({ wid, out }: { wid: string; out: any }) {
+  const { can } = useSession();
+  const [owner, setOwner] = useState("");
+  const matrix: any[] = (out.matrix || []).filter((m: any) => !owner || m.owner === owner);
+  const lists: [string, string][] = [["partner_items", "Partner / SI supplies"], ["customer_prerequisites", "Customer provides"],
+    ["out_of_scope", "Out of scope"], ["motadata_gaps", "Motadata gaps (non-compliant or to validate)"]];
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {(out.owner_counts || []).map((o: any) => (
+          <button key={o.owner} type="button" onClick={() => setOwner(owner === o.owner ? "" : o.owner)}
+            className={owner === o.owner ? "outline outline-2 outline-black rounded-full" : ""}>
+            <Badge tone={OWNER_TONE[o.owner] || "neutral"}>{o.owner}: {o.requirements}</Badge></button>
+        ))}
+        {can("rfp.export") && <Button onClick={() => download(`/rfp/workspaces/${wid}/export?kind=scope`)}><Download size={16} /> Scope matrix (Excel)</Button>}
+      </div>
+      <div>
+        <div className="text-sm font-semibold">Motadata modules in scope</div>
+        {(out.modules_in_scope || []).length ? (
+          <ul className="mt-1 flex flex-col gap-1 text-sm">
+            {out.modules_in_scope.map((m: any, i: number) => <li key={i}><Badge tone="accent">{m.product}</Badge> <b>{m.module}</b> <span className="text-muted">{m.basis}</span></li>)}
+          </ul>) : <p className="text-sm text-muted">None identified.</p>}
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {lists.map(([k, label]) => (
+          <div key={k}><div className="text-sm font-semibold">{label}</div>
+            {(out[k] || []).length ? <ul className="list-disc pl-5 text-sm">{out[k].map((it: any, i: number) => (
+              <li key={i}>{it.item} {it.ref && <span className="text-muted">({it.ref})</span>}{it.note && <span className="text-muted"> · {it.note}</span>}</li>))}</ul>
+              : <p className="text-sm text-muted">None</p>}</div>
+        ))}
+      </div>
+      <details>
+        <summary className="cursor-pointer text-sm font-semibold">Requirement matrix ({matrix.length}{owner && ` · ${owner}`})</summary>
+        <Table head={["No.", "Owner", "Product", "Module", "Note"]} empty="No requirements.">
+          {matrix.map((m) => (
+            <tr key={m.number}><td className="font-semibold">{m.number}</td><td><Badge tone={OWNER_TONE[m.owner] || "neutral"}>{m.owner}</Badge></td>
+              <td>{m.product}</td><td>{m.module}</td><td className="text-sm text-muted">{m.note}</td></tr>
+          ))}
+        </Table>
+      </details>
     </div>
   );
 }
