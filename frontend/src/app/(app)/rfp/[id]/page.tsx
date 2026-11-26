@@ -1,10 +1,11 @@
 "use client";
-import { ArrowDown, ArrowUp, CheckCheck, Download, Play, RefreshCw, Sparkles, Upload } from "lucide-react";
+import { CheckCheck, MessageSquare, Download, Play, RefreshCw, Sparkles, Upload } from "lucide-react";
 import { use, useState } from "react";
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Progress, Select, Spinner, StatusBadge, Table, Tabs, Textarea } from "@/components/ui";
 import { api, download, fmtDate, money } from "@/lib/api";
 import { useApi, useJobPoll } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
+import { RfpChat } from "./chat";
 import { BidWorkflow } from "./workflow";
 
 const STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"];
@@ -19,6 +20,8 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
   const ws = useApi<any>(`/rfp/workspaces/${id}`);
   const [tab, setTab] = useState<string | null>(null);
   const [step, setStep] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [version, setVersion] = useState(0);  // bumped when the chat applies a change, so open tabs reload
   const [msg, setMsg] = useState<{ tone: "error" | "success" | "info"; text: string } | null>(null);
   const running = ws.data?.job && ["Queued", "Processing"].includes(ws.data.job.status) ? ws.data.job.id : null;
   const job = useJobPoll(running, () => ws.reload());
@@ -32,7 +35,9 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
     <>
       <PageHeader title={w.name} subtitle={<span className="flex flex-wrap items-center gap-2"><StatusBadge status={w.status} />
         {w.customer && <span>{w.customer}</span>}<span>Revision {w.revision}</span>{w.due_date && <span>Due {fmtDate(w.due_date)}</span>}
-        <span>Estimated AI cost {money(w.estimated_cost)}</span></span>} />
+        <span>Estimated AI cost {money(w.estimated_cost)}</span></span>}
+        actions={w.status !== "Uploaded" && <Button variant={chatOpen ? "secondary" : "primary"} onClick={() => setChatOpen(!chatOpen)}><MessageSquare size={16} /> Ask this RFP</Button>} />
+      <RfpChat wid={id} open={chatOpen} onClose={() => setChatOpen(false)} onChanged={() => { setVersion((v) => v + 1); ws.reload(); }} />
       {msg && <div className="mb-4"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
       {running && job && (
         <div className="mb-4"><Card title={`Job #${job.id} · ${job.status}`} actions={<Button onClick={() => run(() => api.post(`/admin/jobs/${job.id}/cancel`), "Cancel requested")}>Cancel</Button>}>
@@ -44,11 +49,11 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
         { key: "analysis", label: "Other analysis" }, { key: "proposal", label: "Proposal" },
         { key: "export", label: "Export and submit" }]} />
       {current === "documents" && <Documents w={w} reload={ws.reload} run={run} busy={!!running} />}
-      {current === "workflow" && <BidWorkflow key={`${w.job?.id}-${w.job?.status}`} wid={id} step={step} setStep={setStep}
+      {current === "workflow" && <BidWorkflow key={`${w.job?.id}-${w.job?.status}-${version}`} wid={id} step={step} setStep={setStep}
         busy={!!running} onJob={ws.reload}
         renderCompliance={(onRevise, reloadWf) => <Requirements wid={id} busy={!!running} run={run} onRevise={onRevise} onChanged={reloadWf} />}
         renderBoq={(reloadWf) => <BidParameters wid={id} onSaved={reloadWf} />} />}
-      {current === "analysis" && <Analysis wid={id} busy={!!running} run={run} />}
+      {current === "analysis" && <Analysis key={version} wid={id} busy={!!running} run={run} />}
       {current === "proposal" && <Proposal w={w} run={run} busy={!!running} />}
       {current === "export" && <ExportTab w={w} run={run} />}
     </>

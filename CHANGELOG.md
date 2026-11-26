@@ -50,6 +50,17 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   synopsis and scope; pre-bid queries after synopsis). Every edit, accepted revision or restore is a new version with
   history and restore. When an approved step changes or is reopened, the approved steps built on it are reopened and
   marked "Needs review" with the reason; corrigenda and revised RFPs do the same.
+- RFP Intelligence: **Ask this RFP** chat (button in the workspace header, a side panel available on every tab).
+  Answers questions about one tender from its RFP and corrigendum text, its requirements with Motadata's compliance
+  answers, the team's working outputs (synopsis, scope, key considerations, pre-bid queries, bid parameters, hardware
+  sizing), approved Motadata knowledge and past submitted bids, quoting figures as the RFP states them, with
+  references (RFP page, requirement number, document, past bid). Says "not found" instead of guessing; never gives
+  prices. Change requests ("add a pre-bid query on log retention", "make R045 partially compliant", "make it DC + DR")
+  come back as proposed changes: a change to a review step is prepared as a before / after on that step and applied
+  or discarded from the chat or the step; a bid parameter or sizing input change shows before / after and Apply saves
+  a new, unconfirmed version. Applied changes reopen the step for approval like any other edit. The chat history is
+  shared by the team on the workspace and stored as `rfp_agent_runs` rows (no migration); it uses the RFP analysis
+  agent's model settings.
 - RFP Intelligence: **Key considerations** agent: what the bid team must take care of (eligibility, OEM / MAF,
   commercial and payment terms, penalties and LD, Motadata gaps, partner and customer dependencies, deviations,
   timeline, documents) with RFP reference, impact, action and owner, plus an indicative bid view. Built from the

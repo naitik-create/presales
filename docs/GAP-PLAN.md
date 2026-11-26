@@ -76,7 +76,7 @@ Recommended: **use the BOQ Generator (172.16.12.103:5050) as the single source**
 `HW sizing.xlsx`, `SW BOQ unpriced.xlsx`, `HW BOQ unpriced.xlsx`. Each file is also downloadable on its own; each
 generation is versioned.
 
-### G8. Chat about this RFP, with changes
+### G8. Chat about this RFP, with changes (done 2026-11-26: "Ask this RFP" panel)
 * "Ask this RFP" side panel in the workspace. Context: the workspace's requirements (already embedded), extracted text
   segments, agent outputs, bid parameters, plus approved knowledge. Answers cite RFP pages.
 * Change requests ("add a query on 3-year log retention", "make it DC + DR", "mark clause 7.3 partial") come back as

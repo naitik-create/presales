@@ -22,7 +22,7 @@ from app.models.rfp import (RFPAgentRun, RFPComplianceResponse, RFPDocument, RFP
                             RFPWorkspace)
 from app.modules.knowledge.routes import add_pairs
 from app.modules.rfp import agents as A
-from app.modules.rfp import bidparams, boq_client, exports, hwsizing, stages, workflow
+from app.modules.rfp import bidparams, boq_client, chat, exports, hwsizing, stages, workflow
 from app.modules.rfp.service import compliance_digest, workspace_cost
 from app.parsing.extract import docx_to_pdf, extract
 
@@ -409,6 +409,7 @@ def accept_draft(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.edit
             raise HTTPException(409, f"{s['label']} changed after this revision was made. Discard it and ask again.")
         stages.new_version(db, ws, s["agent"], draft.output["proposal"], "revised")
         stages.changed(db, ws, key, f"{s['label']} was revised ({_who(cu)}: {draft.output.get('instruction', '')[:120]})")
+    chat.close_by_job(db, wid, draft.job_id, "applied")
     db.delete(draft)
     audit(db, cu.user, "rfp.stage_revision_accepted", "rfp_workspace", wid, stage=key, skipped=skipped)
     db.commit()
@@ -419,7 +420,9 @@ def accept_draft(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.edit
 def discard_draft(wid: int, key: str, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
     ws = _ws(db, wid)
     _stage(key)
-    stages.drop_draft(db, wid, key)
+    d = stages.drop_draft(db, wid, key)
+    if d:
+        chat.close_by_job(db, wid, d.job_id, "discarded")
     audit(db, cu.user, "rfp.stage_revision_discarded", "rfp_workspace", wid, stage=key)
     db.commit()
     return stages.overview(db, ws)
@@ -529,12 +532,20 @@ def get_bid_parameters(wid: int, cu: CurrentUser = Depends(require("rfp.view")),
 def save_bid_parameters(wid: int, body: dict, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
     """Save edited parameters and sizing inputs as a new version; it needs confirming again."""
     ws = _ws(db, wid)
-    current = _params_run(db, wid)
+    run = _save_params(db, ws, body.get("params") or {}, body.get("sizing_inputs"), f"Edited by {_who(cu)}")
+    audit(db, cu.user, "rfp.bid_parameters_saved", "rfp_workspace", wid)
+    db.commit()
+    return _params_out(db, ws, run)
+
+
+def _save_params(db: Session, ws: RFPWorkspace, changes: dict, sizing_inputs: list | None, source: str) -> RFPAgentRun:
+    """New, unconfirmed version of the bid parameters. sizing_inputs None keeps the current ones."""
+    current = _params_run(db, ws.id)
     base = current.output if current else _prefilled(db, ws)
     try:
-        params = bidparams.clean({**base["params"], **(body.get("params") or {})})
+        params = bidparams.clean({**base["params"], **changes})
         items = []
-        for i in body.get("sizing_inputs", base["sizing_inputs"]) or []:
+        for i in (base["sizing_inputs"] if sizing_inputs is None else sizing_inputs) or []:
             if i.get("name") in hwsizing.INPUTS and str(i.get("value", "")).strip() != "":
                 items.append({"name": i["name"], "value": float(i["value"]), "ref": str(i.get("ref", ""))[:200],
                               "note": str(i.get("note", ""))[:300]})
@@ -543,14 +554,13 @@ def save_bid_parameters(wid: int, body: dict, cu: CurrentUser = Depends(require(
     sources = dict(base.get("sources") or {})
     for k, v in params.items():
         if base["params"].get(k) != v:
-            sources[k] = f"Edited by {cu.user.full_name or cu.user.username}"
+            sources[k] = source
     out = {"params": params, "sources": sources, "notes": base.get("notes", []), "sizing_inputs": items,
            "sizing": bidparams.compute_sizing(params, items)}
-    run = RFPAgentRun(workspace_id=wid, agent_key=BID_PARAMS, revision=ws.revision, output=out, approved=False)
+    run = RFPAgentRun(workspace_id=ws.id, agent_key=BID_PARAMS, revision=ws.revision, output=out, approved=False)
     db.add(run)
-    audit(db, cu.user, "rfp.bid_parameters_saved", "rfp_workspace", wid)
-    db.commit()
-    return _params_out(db, ws, run)
+    db.flush()
+    return run
 
 
 @router.post("/workspaces/{wid}/bid-parameters/confirm")
@@ -644,6 +654,120 @@ def _latest_runs(db: Session, wid: int) -> dict:
         if run:
             out[key] = run.edited_output or run.output
     return out
+
+
+# ---------- chat about this RFP ----------
+@router.get("/workspaces/{wid}/chat")
+def chat_messages(wid: int, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    _ws(db, wid)
+    return [chat.message_out(db, m) for m in chat.messages(db, wid)]
+
+
+class ChatIn(BaseModel):
+    question: str
+
+
+@router.post("/workspaces/{wid}/chat")
+def chat_ask(wid: int, body: ChatIn, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    """Answer a question about this RFP, or propose changes the team can apply. A proposed change to a review step is
+    prepared straight away (as a draft on that step) when the user may edit and no job is running."""
+    ws = _ws(db, wid)
+    question = body.question.strip()
+    if not question:
+        raise HTTPException(400, "Type a question")
+    params = _params_out(db, ws, _params_run(db, wid))
+    try:
+        run = chat.ask(db, ws, question=question[:4000], user_id=cu.id, by=_who(cu), sections=cu.section_keys(),
+                       runs=_latest_runs(db, wid), params=params)
+    except ai.AIError as e:
+        raise HTTPException(502, str(e)) from e
+    audit(db, cu.user, "rfp.chat_asked", "rfp_workspace", wid, actions=len(run.output.get("actions") or []))
+    db.commit()
+    if cu.has("rfp.edit"):
+        for i, a in enumerate(run.output.get("actions") or []):
+            if a["kind"] == "revise" and a["state"] == "proposed":
+                try:
+                    _prepare(db, ws, cu, run, i)
+                except HTTPException:
+                    pass  # a job is already running: the card offers Prepare
+                break
+    return chat.message_out(db, run)
+
+
+def _chat_action(db: Session, wid: int, mid: int, index: int) -> tuple[RFPAgentRun, dict]:
+    run = db.get(RFPAgentRun, mid)
+    if not run or run.workspace_id != wid or run.agent_key != chat.CHAT_KEY:
+        raise HTTPException(404, "Message not found")
+    actions = run.output.get("actions") or []
+    if index < 0 or index >= len(actions):
+        raise HTTPException(404, "Proposed change not found")
+    return run, actions[index]
+
+
+def _prepare(db: Session, ws: RFPWorkspace, cu: CurrentUser, run: RFPAgentRun, index: int) -> None:
+    a = run.output["actions"][index]
+    job = _enqueue_rfp(db, "rfp.revise", ws, cu, stage=a["stage"], instruction=a["instruction"],
+                       requirement_ids=a.get("requirement_ids") or [], by=_who(cu))
+    chat.set_action(run, index, state="preparing", job_id=job.id)
+    audit(db, cu.user, "rfp.chat_change_prepared", "rfp_workspace", ws.id, stage=a["stage"], job_id=job.id)
+    db.commit()
+
+
+@router.post("/workspaces/{wid}/chat/{mid}/actions/{index}/prepare")
+def chat_prepare(wid: int, mid: int, index: int, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    ws = _ws(db, wid)
+    run, a = _chat_action(db, wid, mid, index)
+    now = chat.message_out(db, run)["actions"][index]
+    if a["kind"] != "revise" or not (now["state"] in ("proposed", "failed", "closed")
+                                     or (now["state"] == "ready" and now.get("outdated"))):
+        raise HTTPException(400, "This change cannot be prepared")
+    _prepare(db, ws, cu, run, index)
+    return chat.message_out(db, run)
+
+
+@router.post("/workspaces/{wid}/chat/{mid}/actions/{index}/apply")
+def chat_apply(wid: int, mid: int, index: int, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    """Apply a proposed change. A step change goes through its draft (the same as Accept on the step); a bid parameter
+    change saves a new, unconfirmed version of the bid parameters."""
+    ws = _ws(db, wid)
+    run, a = _chat_action(db, wid, mid, index)
+    if a["kind"] == "params":
+        if a["state"] != "proposed":
+            raise HTTPException(400, "This change was already handled")
+        # only the fields the chat changed, on top of the parameters as they are now
+        changes = {p["name"]: p["after"] for p in a.get("preview") or [] if p.get("target") == "param"}
+        new_sizing = {p["name"]: p["after"] for p in a.get("preview") or [] if p.get("target") == "sizing"}
+        sizing = []
+        for i in _params_out(db, ws, _params_run(db, wid)).get("sizing_inputs") or []:
+            if i["name"] in new_sizing:
+                i = {**i, "value": new_sizing.pop(i["name"]), "ref": "Changed in chat", "note": ""}
+            sizing.append(i)
+        sizing += [{"name": k, "value": v, "ref": "Changed in chat", "note": ""} for k, v in new_sizing.items() if v != ""]
+        _save_params(db, ws, changes, sizing, f"Changed in chat by {_who(cu)}")
+        chat.set_action(run, index, state="applied")
+        audit(db, cu.user, "rfp.chat_change_applied", "rfp_workspace", wid, stage="boq")
+        db.commit()
+        return chat.message_out(db, run)
+    out = chat.message_out(db, run)["actions"][index]
+    if out["state"] != "ready":
+        raise HTTPException(400, "The change is not ready yet")
+    accept_draft(wid, a["stage"], cu, db)
+    db.refresh(run)
+    return chat.message_out(db, run)
+
+
+@router.post("/workspaces/{wid}/chat/{mid}/actions/{index}/discard")
+def chat_discard(wid: int, mid: int, index: int, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    _ws(db, wid)
+    run, a = _chat_action(db, wid, mid, index)
+    out = chat.message_out(db, run)["actions"][index]
+    if out["state"] == "ready":
+        discard_draft(wid, a["stage"], cu, db)
+        db.refresh(run)
+    else:
+        chat.set_action(run, index, state="discarded")
+        db.commit()
+    return chat.message_out(db, run)
 
 
 # ---------- templates & proposals ----------
