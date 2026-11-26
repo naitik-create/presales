@@ -1,5 +1,5 @@
 "use client";
-import { CheckCheck, Download, Play, RefreshCw, Sparkles, Upload } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, Download, Play, RefreshCw, Sparkles, Upload } from "lucide-react";
 import { use, useState } from "react";
 import { Alert, Badge, Button, Card, Field, Input, Modal, PageHeader, Progress, Select, Spinner, StatusBadge, Table, Tabs, Textarea } from "@/components/ui";
 import { api, download, fmtDate, money } from "@/lib/api";
@@ -187,7 +187,8 @@ function Analysis({ wid, busy, run }: any) {
               {r && can("rfp.edit") && <Button onClick={() => { setEdit(r); setText(JSON.stringify(r.output, null, 2)); }}>Edit</Button>}
               {r && !r.approved && can("rfp.approve") && <Button onClick={() => api.post(`/rfp/agent-runs/${r.id}/approve`).then(reload)}>Approve</Button>}
             </>}>
-            {r ? <Output value={r.output} /> : <p className="text-sm text-muted">Not run yet.</p>}
+            {!r ? <p className="text-sm text-muted">Not run yet.</p>
+              : k === "prebid" ? <Prebid key={`${r.id}-${r.edited}`} wid={wid} r={r} reload={reload} /> : <Output value={r.output} />}
           </Card>
         );
       })}
@@ -195,6 +196,71 @@ function Analysis({ wid, busy, run }: any) {
         <Textarea rows={24} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="mt-2"><Button variant="primary" onClick={() => api.put(`/rfp/agent-runs/${edit.id}`, { output: JSON.parse(text) }).then(() => { setEdit(null); reload(); })}>Save</Button></div>
       </Modal>
+    </div>
+  );
+}
+
+const TOP_N = 10;
+const IMPACT_TONE: Record<string, "error" | "warning" | "neutral"> = { High: "error", Medium: "warning", Low: "neutral" };
+
+/** Ranked pre-bid queries: tick the ones to submit, reorder, save, and download in the tender's own format. */
+function Prebid({ wid, r, reload }: { wid: string; r: any; reload: () => void }) {
+  const { can } = useSession();
+  const initial = (r.output.queries || []).map((q: any, i: number) => ({ ...q, selected: "selected" in q ? q.selected : i < TOP_N }));
+  const [queries, setQueries] = useState<any[]>(initial);
+  const [dirty, setDirty] = useState(false);
+  const [err, setErr] = useState("");
+  const fmt = r.output.tender_format;
+  const picked = queries.filter((q) => q.selected).length;
+  const update = (next: any[]) => { setQueries(next); setDirty(true); };
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= queries.length) return;
+    const next = [...queries];
+    [next[i], next[j]] = [next[j], next[i]];
+    update(next.map((q, n) => ({ ...q, rank: n + 1 })));
+  };
+  async function save() {
+    try {
+      await api.put(`/rfp/agent-runs/${r.id}`, { output: { ...r.output, queries } });
+      setDirty(false); setErr(""); reload();
+    } catch (e) { setErr((e as Error).message); }
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {err && <Alert tone="error">{err}</Alert>}
+      {fmt?.found
+        ? <Alert tone="info">Format prescribed by the RFP{fmt.ref && ` (${fmt.ref})`}: {fmt.columns.map((c: any) => c.heading).join(" | ")}
+            {fmt.instructions && <div className="mt-1">Submission: {fmt.instructions}</div>}</Alert>
+        : <Alert tone="info">The RFP prescribes no pre-bid query format, so downloads use the standard format.</Alert>}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-sm">{picked} of {queries.length} selected to submit{picked !== TOP_N && ` (usually ${TOP_N})`}</span>
+        {can("rfp.edit") && dirty && <Button variant="primary" onClick={save}>Save selection</Button>}
+        {can("rfp.export") && <>
+          <Button disabled={dirty} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=prebid`)}><Download size={16} /> Excel</Button>
+          <Button disabled={dirty} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=prebid_docx`)}><Download size={16} /> Word</Button>
+        </>}
+        {dirty && <span className="text-sm text-muted">Save before downloading.</span>}
+      </div>
+      <Table head={["Submit", "Rank", "Impact", "Reference", "Query", "Why it matters", ""]} empty="No queries.">
+        {queries.map((q, i) => (
+          <tr key={i} className={q.selected ? "" : "opacity-60"}>
+            <td><input type="checkbox" aria-label={`Submit query ${i + 1}`} checked={!!q.selected} disabled={!can("rfp.edit")}
+              onChange={(e) => update(queries.map((x, n) => n === i ? { ...x, selected: e.target.checked } : x))} /></td>
+            <td className="font-semibold">{q.rank ?? i + 1}</td>
+            <td>{q.impact && <Badge tone={IMPACT_TONE[q.impact] || "neutral"}>{q.impact}</Badge>}<div className="text-sm text-muted">{q.category}</div></td>
+            <td className="whitespace-nowrap text-muted">{q.ref}</td>
+            <td className="max-w-prose">{q.query}
+              {q.clause_text && <div className="mt-1 text-sm text-muted">Clause: {q.clause_text}</div>}
+              {q.suggested_change && <div className="mt-1 text-sm">Suggested change: {q.suggested_change}</div>}</td>
+            <td className="max-w-prose text-sm">{q.reason}</td>
+            <td className="whitespace-nowrap">{can("rfp.edit") && <>
+              <Button variant="ghost" aria-label="Move up" disabled={i === 0} onClick={() => move(i, -1)}><ArrowUp size={14} /></Button>
+              <Button variant="ghost" aria-label="Move down" disabled={i === queries.length - 1} onClick={() => move(i, 1)}><ArrowDown size={14} /></Button>
+            </>}</td>
+          </tr>
+        ))}
+      </Table>
     </div>
   );
 }

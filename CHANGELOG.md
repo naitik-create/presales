@@ -6,6 +6,15 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
 ## Unreleased
 
 ### Added
+- RFP Intelligence: **bid synopsis**. RFP analysis now fills 20 tender facts with references (tender no., authority, bid
+  type, value, EMD, tender fee, PBG, contract and AMC period, timeline, turnover, experience, certifications, OEM/MAF
+  criteria, Make in India, consortium, evaluation method, payment terms, SLA and penalties, LD) plus ranked red flags.
+  The analysis report (Word/PDF) and internal workbook open with the bid synopsis.
+- RFP Intelligence: **top 10 pre-bid queries in the tender's format**. Queries are ranked by impact on the bid, with
+  category, clause details and suggested change; the top 10 are pre-selected. The agent finds the pre-bid query format
+  the RFP prescribes (columns and submission instructions) and the new Excel / Word downloads use exactly those columns
+  (standard format when the RFP has none). On the Analysis tab, tick which queries to submit, reorder and save.
+  Plan for the remaining RFP gaps: `docs/GAP-PLAN.md`.
 - Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, simple pull-work-push workflow on `main`,
   conflict handling, migration rules, conventions) and GitHub Actions checks after every push (backend tests on
   PostgreSQL 18 with pgvector, single migration head, frontend type check and build).

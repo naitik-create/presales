@@ -15,6 +15,7 @@ from app.models.knowledge import KnowledgeSection, SizingRule
 from app.models.rfp import RFPAgentRun, RFPComplianceResponse, RFPDocument, RFPRequirement, RFPWorkspace
 from app.modules.ask.sizing import apply_rules, required_inputs
 from app.modules.rfp import agents as A
+from app.modules.rfp import bidpack
 from app.common.text import normalise
 from app.parsing.extract import extract
 
@@ -173,13 +174,11 @@ def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
     for part in parts:
         out = ai.call(db, agent_key, system=sys, user=part + extra, schema=schema, user_id=job.created_by,
                       ref_type="rfp_workspace", ref_id=ws.id, job_id=job.id)
-        for k, v in out.items():
-            if isinstance(v, list):
-                merged.setdefault(k, []).extend(v)
-            elif isinstance(v, str):
-                merged[k] = (merged.get(k, "") + "\n\n" + v).strip() if merged.get(k) else v
-            else:
-                merged[k] = v
+        bidpack.merge_outputs(merged, out)
+    if key == "analysis":
+        bidpack.finalise_analysis(merged)
+    if key == "prebid":
+        bidpack.finalise_prebid(merged)
     if key == "architecture":
         inputs = {i["name"]: i["value"] for i in merged.get("sizing_inputs", [])}
         products = ws.products or ["ObserveOps"]

@@ -454,6 +454,14 @@ def export(wid: int, kind: str = "compliance", cu: CurrentUser = Depends(require
         name = f"RFP analysis - {_safe(ws.name)}.docx"
         if kind == "report_pdf":
             data, mime, name = docx_to_pdf(data), "application/pdf", name.replace(".docx", ".pdf")
+    elif kind in ("prebid", "prebid_docx"):
+        prebid = _latest_runs(db, wid).get("prebid")
+        if not prebid or not prebid.get("queries"):
+            raise HTTPException(400, "Run the pre-bid query agent first")
+        if kind == "prebid":
+            data, mime, name = exports.prebid_sheet(ws.name, prebid), XLSX, f"Pre-bid queries - {_safe(ws.name)}.xlsx"
+        else:
+            data, mime, name = exports.prebid_docx(ws.name, prebid), DOCX, f"Pre-bid queries - {_safe(ws.name)}.docx"
     else:
         raise HTTPException(400, "Unknown export")
     audit(db, cu.user, "rfp.exported", "rfp_workspace", wid, kind=kind)

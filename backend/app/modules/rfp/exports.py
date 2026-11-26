@@ -1,4 +1,5 @@
 from app.exports import brand
+from app.modules.rfp import bidpack
 from app.modules.rfp.agents import DOC_AGENT_LABELS
 
 
@@ -24,10 +25,18 @@ def internal_workbook(ws_name: str, rows: list[tuple], runs: dict) -> bytes:
         brand.write_table(wb, "Risks", ["Category", "Description", "Impact", "Reference", "Mitigation"],
                           [[i["category"], i["description"], i["impact"], i["ref"], i["mitigation"]] for i in runs["risk"].get("items", [])],
                           [22, 60, 10, 20, 50])
+    if "analysis" in runs:
+        brand.write_table(wb, "Bid synopsis", ["Item", "Value", "Reference"],
+                          [[f["item"], f["value"], f["ref"]] for f in bidpack.facts_list(runs["analysis"].get("bid_facts"))],
+                          [36, 70, 22])
     if "prebid" in runs:
-        brand.write_table(wb, "Pre-bid queries", ["Reference", "Clause", "Query", "Reason"],
-                          [[q["ref"], q["clause_text"], q["query"], q["reason"]] for q in runs["prebid"].get("queries", [])],
-                          [20, 50, 60, 40])
+        brand.write_table(wb, "Pre-bid queries", ["Rank", "Submit", "Impact", "Category", "Reference", "Clause", "Query",
+                                                  "Suggested change", "Reason (internal)"],
+                          [[q.get("rank", ""), "Yes" if q in bidpack.selected_queries(runs["prebid"]) else "",
+                            q.get("impact", ""), q.get("category", ""), q.get("ref", ""), q.get("clause_text", ""),
+                            q.get("query", ""), q.get("suggested_change", ""), q.get("reason", "")]
+                           for q in runs["prebid"].get("queries", [])],
+                          [7, 8, 9, 24, 20, 50, 60, 40, 40])
     if "boq" in runs:
         brand.write_table(wb, "BOQ inputs", ["Product", "Module", "Licence metric", "Quantity", "Assumption", "Reference"],
                           [[x["product"], x["module"], x["licence_metric"], x["quantity"], x["assumption"], x["ref"]]
@@ -45,15 +54,63 @@ def _cite(s: dict) -> str:
     return f"{s.get('title', '')} {s.get('page', '')}".strip()
 
 
+def prebid_sheet(ws_name: str, prebid: dict) -> bytes:
+    """The queries to submit, in the column format the RFP prescribes (or the standard format)."""
+    headers, rows = bidpack.prebid_table(prebid)
+    wb = brand.new_workbook()
+    widths = [8 if h.lower().startswith(("sl", "s.", "sr", "no")) else 45 if len(h) > 12 else 18 for h in headers]
+    brand.write_table(wb, "Pre-bid queries", headers, rows, widths, heading=f"Pre-bid queries - {ws_name}")
+    return brand.workbook_bytes(wb)
+
+
+def prebid_docx(ws_name: str, prebid: dict) -> bytes:
+    headers, rows = bidpack.prebid_table(prebid)
+    doc = brand.new_document(f"Pre-bid queries - {ws_name}")
+    fmt = prebid.get("tender_format") or {}
+    if fmt.get("found") and fmt.get("instructions"):
+        doc.add_paragraph(f"Submission: {fmt['instructions']}")
+    _landscape(doc)
+    brand.add_table(doc, headers, rows)
+    return brand.document_bytes(doc)
+
+
+def _landscape(doc) -> None:
+    from docx.enum.section import WD_ORIENT
+    s = doc.sections[0]
+    if s.orientation != WD_ORIENT.LANDSCAPE:
+        s.orientation = WD_ORIENT.LANDSCAPE
+        s.page_width, s.page_height = s.page_height, s.page_width
+
+
+def _bid_synopsis(doc, analysis: dict) -> None:
+    doc.add_heading("Bid synopsis", level=1)
+    brand.add_table(doc, ["Item", "Value", "Reference"],
+                    [[f["item"], f["value"], f["ref"]] for f in bidpack.facts_list(analysis.get("bid_facts"))])
+    if analysis.get("dates"):
+        doc.add_heading("Key dates", level=3)
+        brand.add_table(doc, ["Item", "Date", "Reference"], [[d["item"], d["date"], d["ref"]] for d in analysis["dates"]])
+    if analysis.get("red_flags"):
+        doc.add_heading("Red flags", level=3)
+        brand.add_table(doc, ["Issue", "Impact", "Reference"],
+                        [[f["issue"], f["impact"], f["ref"]] for f in analysis["red_flags"]])
+
+
 def report_docx(ws_name: str, runs: dict) -> bytes:
     doc = brand.new_document(f"RFP analysis - {ws_name}")
+    if runs.get("analysis", {}).get("bid_facts"):
+        _bid_synopsis(doc, runs["analysis"])
     for key in ("synopsis", "analysis", "architecture", "risk", "pqtq", "boq", "prebid"):
         out = runs.get(key)
         if not out:
             continue
         doc.add_heading(DOC_AGENT_LABELS[key], level=1)
+        if key == "prebid":
+            brand.add_table(doc, ["Rank", "Submit", "Impact", "Reference", "Query"],
+                            [[q.get("rank", ""), "Yes" if q in bidpack.selected_queries(out) else "", q.get("impact", ""),
+                              q.get("ref", ""), q.get("query", "")] for q in out.get("queries", [])])
+            continue
         for k, v in out.items():
-            if k in ("source_ids", "citations"):
+            if k in ("source_ids", "citations", "bid_facts", "red_flags"):
                 continue
             label = k.replace("_", " ").capitalize()
             if isinstance(v, str) and v:

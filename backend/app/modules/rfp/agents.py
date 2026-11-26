@@ -1,4 +1,5 @@
 """RFP agent prompts and output schemas (§8.4)."""
+from app.modules.rfp.bidpack import BID_FACTS, NOT_STATED, PREBID_CATEGORIES, PREBID_FIELDS
 
 COMPLIANCE_STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"]
 
@@ -36,11 +37,22 @@ then past submitted RFP answers (P). Prefer higher-priority sources; if sources 
 Use "Needs Product Validation" when the sources do not clearly establish the capability. Do not claim compliance without evidence.
 The proposed response is customer-facing, concise and factual. Put caveats and anything the team must check in validation_remarks."""
 
+FACT = _obj({"value": S, "ref": S})
 ANALYSIS_SCHEMA = _obj({
+    "bid_facts": _obj({key: FACT for key, _label in BID_FACTS}),
+    "red_flags": {"type": "array", "items": _obj({"issue": S, "impact": {"type": "string", "enum": ["High", "Medium", "Low"]},
+                                                   "ref": S})},
     "summary": S, "objectives": SA, "scope": SA, "submission_requirements": SA,
     "dates": {"type": "array", "items": _obj({"item": S, "date": S, "ref": S})},
     "milestones": SA, "mandatory_conditions": SA, "missing_information": SA})
-ANALYSIS_SYSTEM = "Analyse this RFP. Give references (page, sheet or section) in brackets for every date and condition."
+ANALYSIS_SYSTEM = f"""Analyse this RFP. Give references (page, sheet or section) in brackets for every date and condition.
+bid_facts is the bid synopsis the presales team reads first. For each fact give the value as the RFP states it, with
+amounts, currency, percentages and durations exactly as written, and the reference. When the RFP does not state it,
+the value is "{NOT_STATED}" and the reference is empty. The facts are:
+{chr(10).join(f"- {key}: {label}" for key, label in BID_FACTS)}
+red_flags are clauses that make bidding hard or risky for a software OEM and its partner: unusual eligibility, short
+timelines, uncapped penalties or liquidated damages, unlimited liability, one-sided payment terms, specifications that
+point to a single vendor, mandatory items Motadata does not make. Rate the impact on the bid."""
 
 ARCH_SCHEMA = _obj({
     "recommended_architecture": S, "components": SA, "prerequisites": SA, "ha_dr_needs": S,
@@ -69,9 +81,32 @@ BOQ_SYSTEM = "List the Motadata modules, licence metrics and quantities this RFP
 SYNOPSIS_SCHEMA = _obj({"overview": S, "major_requirements": SA, "compliance_position": S, "significant_risks": SA})
 SYNOPSIS_SYSTEM = "Write a short management overview of this RFP: scope, major requirements, Motadata's compliance position and significant risks."
 
-PREBID_SCHEMA = _obj({"queries": {"type": "array", "items": _obj({"ref": S, "clause_text": S, "query": S, "reason": S})}})
-PREBID_SYSTEM = """Draft pre-bid clarification questions for requirements that are unclear, contradictory, restrictive or
-depend on customer information. Questions are polite, specific and reference the clause."""
+PREBID_SCHEMA = _obj({
+    "tender_format": _obj({
+        "found": {"type": "boolean"}, "ref": S, "instructions": S,
+        "columns": {"type": "array", "items": _obj({"heading": S, "field": {"type": "string", "enum": PREBID_FIELDS}})}}),
+    "queries": {"type": "array", "items": _obj({
+        "rank": {"type": "integer"}, "impact": {"type": "string", "enum": ["High", "Medium", "Low"]},
+        "category": {"type": "string", "enum": PREBID_CATEGORIES},
+        "document": S, "section": S, "page": S, "clause_no": S, "ref": S,
+        "clause_text": S, "query": S, "suggested_change": S, "reason": S})}})
+PREBID_SYSTEM = f"""Draft pre-bid clarification queries for this RFP on behalf of Motadata (software OEM for ObserveOps and
+ServiceOps) and its bidding partner.
+
+1. Tender format. Look for the format the RFP prescribes for pre-bid queries (often an annexure or a table in the
+   instructions to bidders). If found, set found=true, give its reference, list its column headings exactly as printed in
+   order, and map each heading to the closest field: {", ".join(PREBID_FIELDS)} ("blank" when nothing fits). Put any
+   submission instructions (email address, last date and time, file type, portal) in instructions. If no format is
+   prescribed, set found=false and leave columns empty.
+
+2. Queries. Raise queries where a clause is unclear, contradictory, restrictive, appears to favour one vendor, sets
+   eligibility or OEM conditions a mid-size Indian OEM may not meet, leaves quantities or sizing open, or carries
+   uncapped penalties or one-sided commercial terms. Return at most 25, ranked: rank 1 is the query with the biggest
+   effect on Motadata's ability to bid and win. The top 10 are what the team will normally submit, so make them count.
+   For each: document, section, page and clause number as printed; clause_text quoted exactly; query written politely
+   and specifically as the bidder would submit it; suggested_change is the wording or relaxation the bidder asks for
+   (empty if it is a pure clarification); reason is internal and explains why the query matters to Motadata.
+   ref combines document, page and clause for display."""
 
 PROPOSAL_SCHEMA = _obj({"sections": {"type": "array", "items": _obj({"placeholder": S, "content": S})}})
 PROPOSAL_SYSTEM = """Write technical proposal content for each placeholder of the selected template, from the workspace
