@@ -37,6 +37,15 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   existing download with `force_unpriced`, so SKUs, wording and T&C stay maintained there; **Unpriced HW BOQ** is built
   from the sizing. Needs `BOQ_GENERATOR_URL`, `BOQ_GENERATOR_USERNAME`, `BOQ_GENERATOR_PASSWORD` in `backend/.env`
   (see `.env.example`). Parameters are stored as an `rfp_agent_runs` row (`bid_parameters`), so no migration.
+- RFP Intelligence: **one-click bid pack**. After the bid parameters are confirmed, "Generate bid pack" builds one ZIP:
+  bid synopsis and analysis (Word), Motadata scope matrix, pre-bid queries in the tender format (Excel and Word),
+  compliance statement, hardware sizing, unpriced HW BOQ, unpriced SW BOQ, internal workbook, and a README listing
+  every file, anything left out and why, and the confirmed parameters. A part that fails (for example the BOQ
+  Generator is unreachable) is listed instead of stopping the pack. Every pack is kept as a version with who generated
+  it; downloads are audited.
+- **No pricing ever leaves the platform**: besides requesting unpriced output, every file from the BOQ Generator is
+  checked and refused if it holds a formula or a number in a price column (checked against the real priced and
+  unpriced BOQ layouts).
 - Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, simple pull-work-push workflow on `main`,
   conflict handling, migration rules, conventions) and GitHub Actions checks after every push (backend tests on
   PostgreSQL 18 with pgvector, single migration head, frontend type check and build).

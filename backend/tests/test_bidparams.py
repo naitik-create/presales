@@ -122,3 +122,63 @@ def test_boq_client_errors():
         boq_client.unpriced_boq({}, SETTINGS, _transport(boq_status=400)[0])
     with pytest.raises(boq_client.BoqError, match="not set up"):
         boq_client.unpriced_boq({}, boq_client.BoqSettings(BOQ_GENERATOR_USERNAME="", BOQ_GENERATOR_PASSWORD=""))
+
+
+def _sheet(cells: dict) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    for ref, v in cells.items():
+        ws[ref] = v
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_price_guard():
+    header = {"B3": "Product Name", "F3": "Qty", "G3": "Perpetual Price"}
+    boq_client.assert_unpriced(_sheet({**header, "B4": "Monitoring", "E4": 997331, "F4": 1, "H4": 100}))  # unpriced layout
+    for bad in ({"G4": 250000}, {"I4": 5000}, {"J4": "=I4*H4"}, {"K9": "=SUM(K1:K8)"}):
+        with pytest.raises(boq_client.BoqError, match="Refused"):
+            boq_client.assert_unpriced(_sheet({**header, **bad}))
+
+
+def test_boq_client_refuses_a_priced_file():
+    def handler(req):
+        if req.url.path == "/login":
+            return httpx.Response(302, headers={"location": "/select", "set-cookie": "session=abc; Path=/"})
+        return httpx.Response(200, content=_sheet({"G3": "Perpetual Price", "G4": 99}), headers={"content-type": boq_client.XLSX})
+    with pytest.raises(boq_client.BoqError, match="price column"):
+        boq_client.unpriced_boq({}, SETTINGS, httpx.MockTransport(handler))
+
+
+def test_bid_pack_zip():
+    import zipfile
+    from types import SimpleNamespace as NS
+    from app.modules.rfp import bidpack
+    p = bidparams.clean({"customer_name": "ACME", "monitoring_nodes": 100, "architecture": "ha"})
+    bp = {"params": p, "sizing": bidparams.compute_sizing(p, INPUTS)}
+    rows = [(NS(number="R001", text="Collect syslog", source_file="RFP.pdf", source_ref="p.5", category="Technical"),
+             NS(status="Compliant", response="Yes", explanation="", evidence="", sources=[], validation_remarks="",
+                origin="ai", approved=False))]
+    runs = {"analysis": bidpack.finalise_analysis({"bid_facts": {}, "summary": "s"}),
+            "prebid": bidpack.finalise_prebid({"queries": [{"rank": 1, "query": "q", "ref": "p.1", "clause_text": "c"}]})}
+
+    def sw_fail():
+        raise boq_client.BoqError("Cannot reach the BOQ Generator")
+
+    data, files = exports.bid_pack("WS", rows, runs, bp, sw_fail)
+    z = zipfile.ZipFile(io.BytesIO(data))
+    names = set(z.namelist())
+    assert "01 Bid synopsis and RFP analysis.docx" in names and "06 Unpriced HW BOQ.xlsx" in names
+    assert "07 Unpriced SW BOQ.xlsx" not in names and "02 Motadata scope matrix.xlsx" not in names
+    status = {f["name"]: f for f in files}
+    assert status["07 Unpriced SW BOQ.xlsx"]["note"] == "Cannot reach the BOQ Generator"
+    assert status["02 Motadata scope matrix.xlsx"]["note"] == "Motadata scope has not been run"
+    readme = z.read("README.txt").decode()
+    assert "No prices are included" in readme and "customer_name: ACME" in readme
+    for n in names:  # nothing we build carries formulas
+        if n.endswith(".xlsx"):
+            wb = load_workbook(io.BytesIO(z.read(n)))
+            assert not any(isinstance(c.value, str) and c.value.startswith("=") for ws in wb for r in ws.iter_rows() for c in r)
+    data2, files2 = exports.bid_pack("WS", rows, runs, bp, lambda: _sheet({"B3": "Product Name"}))
+    assert "07 Unpriced SW BOQ.xlsx" in zipfile.ZipFile(io.BytesIO(data2)).namelist()

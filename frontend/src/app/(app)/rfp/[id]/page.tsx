@@ -218,6 +218,43 @@ function BidParameters({ wid }: { wid: string }) {
   return <BidParametersForm key={`${data.saved}-${data.confirmed_at}-${JSON.stringify(data.params)}`} wid={wid} data={data} reload={reload} canEdit={can("rfp.edit")} canExport={can("rfp.export")} />;
 }
 
+/** One-click bid pack (ZIP of every output, no prices) and its version history. */
+function BidPacks({ wid, confirmed }: { wid: string; confirmed: boolean }) {
+  const { can } = useSession();
+  const packs = useApi<any[]>(`/rfp/workspaces/${wid}/bid-packs`);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
+  async function generate() {
+    setBusy(true); setMsg(null);
+    try {
+      const p = await api.post<any>(`/rfp/workspaces/${wid}/bid-pack`);
+      const skipped = (p.files || []).filter((f: any) => !f.included);
+      setMsg(skipped.length
+        ? { tone: "warning", text: `Bid pack ready without ${skipped.length} file(s): ${skipped.map((f: any) => `${f.name} (${f.note})`).join("; ")}` }
+        : { tone: "success", text: "Bid pack ready with all files." });
+      packs.reload();
+      await download(`/rfp/bid-packs/${p.id}/download`);
+    } catch (e) { setMsg({ tone: "error", text: (e as Error).message }); } finally { setBusy(false); }
+  }
+  return (
+    <Card title="Bid pack" actions={can("rfp.export") && <Button variant="primary" disabled={!confirmed || busy} onClick={generate}>
+      {busy ? <Spinner /> : <Download size={16} />} Generate bid pack</Button>}>
+      <p className="mb-2 text-sm text-muted">One ZIP: bid synopsis and analysis, scope matrix, pre-bid queries in the tender format,
+        compliance statement, hardware sizing, unpriced HW and SW BOQs, internal workbook. No prices are included.
+        {!confirmed && " Confirm the bid parameters to enable it."}</p>
+      {msg && <div className="mb-2"><Alert tone={msg.tone}>{msg.text}</Alert></div>}
+      <Table head={["Version", "Generated", "By", "Files", ""]} empty="No bid pack generated yet.">
+        {(packs.data || []).map((p, i, all) => (
+          <tr key={p.id}><td className="font-semibold">v{all.length - i}</td><td>{fmtDate(p.at, true)}</td><td>{p.by}</td>
+            <td className="text-sm">{(p.files || []).filter((f: any) => f.included).length} of {(p.files || []).length}
+              {(p.files || []).some((f: any) => !f.included) && <span className="text-muted"> (not included: {(p.files || []).filter((f: any) => !f.included).map((f: any) => f.name.replace(/^\d+ /, "")).join(", ")})</span>}</td>
+            <td>{can("rfp.export") && <Button variant="ghost" onClick={() => download(`/rfp/bid-packs/${p.id}/download`)}><Download size={16} /></Button>}</td></tr>
+        ))}
+      </Table>
+    </Card>
+  );
+}
+
 function BidParametersForm({ wid, data, reload, canEdit, canExport }: any) {
   const [params, setParams] = useState<Record<string, any>>(data.params);
   const initialSizing: Record<string, string> = Object.fromEntries((data.sizing_inputs || []).map((i: any) => [i.name, String(i.value)]));
@@ -243,6 +280,7 @@ function BidParametersForm({ wid, data, reload, canEdit, canExport }: any) {
       {err && <Alert tone="error">{err}</Alert>}
       {locked ? <Alert tone="success">Confirmed {fmtDate(data.confirmed_at, true)}. Unlock to change.</Alert>
         : <Alert tone="info">Check every figure against the RFP, save, then confirm. Values marked Default were not found in the RFP.</Alert>}
+      <BidPacks wid={wid} confirmed={locked} />
       {(data.warnings || []).map((w: string, i: number) => <Alert key={i} tone="warning">{w}</Alert>)}
       {(data.notes || []).map((n: string, i: number) => <Alert key={`n${i}`} tone="info">{n}</Alert>)}
       <div className="flex flex-wrap gap-2">

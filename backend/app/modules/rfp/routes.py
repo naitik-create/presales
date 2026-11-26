@@ -424,6 +424,60 @@ def _confirmed_params(db: Session, wid: int) -> dict:
     return run.output
 
 
+BID_PACK = "bid_pack"  # RFPAgentRun row per generated pack: output = {file_id, files, params_run_id, by}
+
+
+def _pack_out(run: RFPAgentRun) -> dict:
+    return {"id": run.id, "at": run.at, **{k: run.output.get(k) for k in ("files", "by", "file_name", "size")}}
+
+
+@router.post("/workspaces/{wid}/bid-pack")
+def make_bid_pack(wid: int, cu: CurrentUser = Depends(require("rfp.export")), db: Session = Depends(get_db)):
+    """One click: every output for the confirmed bid parameters, as a versioned ZIP. No prices."""
+    ws = _ws(db, wid)
+    bp_run = _params_run(db, wid)
+    if not bp_run or not bp_run.approved:
+        raise HTTPException(400, "Confirm the bid parameters first (Bid parameters tab)")
+    rows = db.execute(select(RFPRequirement, RFPComplianceResponse)
+                      .outerjoin(RFPComplianceResponse, RFPComplianceResponse.requirement_id == RFPRequirement.id)
+                      .where(RFPRequirement.workspace_id == wid, RFPRequirement.active.is_(True)).order_by(RFPRequirement.id)).all()
+    bp = bp_run.output
+    data, files = exports.bid_pack(ws.name, rows, _latest_runs(db, wid), bp,
+                                   lambda: boq_client.unpriced_boq(bidparams.boq_request(bp["params"])))
+    n = (db.scalar(select(func.count()).select_from(RFPAgentRun)
+                   .where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == BID_PACK)) or 0) + 1
+    name = f"Bid pack v{n} - {_safe(bp['params'].get('customer_name') or ws.name)}.zip"
+    f = save_file(db, data, name, "rfp_bidpack", cu.id, "application/zip", allowed={".zip"})
+    run = RFPAgentRun(workspace_id=wid, agent_key=BID_PACK, revision=ws.revision, approved=True,
+                      output={"file_id": f.id, "file_name": f.original_name, "size": len(data), "files": files,
+                              "params_run_id": bp_run.id, "by": cu.user.full_name or cu.user.username})
+    db.add(run)
+    audit(db, cu.user, "rfp.bid_pack_generated", "rfp_workspace", wid, file_id=f.id,
+          included=sum(1 for x in files if x["included"]), skipped=sum(1 for x in files if not x["included"]))
+    db.commit()
+    return _pack_out(run)
+
+
+@router.get("/workspaces/{wid}/bid-packs")
+def list_bid_packs(wid: int, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    _ws(db, wid)
+    runs = db.scalars(select(RFPAgentRun).where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == BID_PACK)
+                      .order_by(RFPAgentRun.id.desc()).limit(50)).all()
+    return [_pack_out(r) for r in runs]
+
+
+@router.get("/bid-packs/{run_id}/download")
+def download_bid_pack(run_id: int, cu: CurrentUser = Depends(require("rfp.export")), db: Session = Depends(get_db)):
+    run = db.get(RFPAgentRun, run_id)
+    if not run or run.agent_key != BID_PACK:
+        raise HTTPException(404, "Not found")
+    f = db.get(StoredFile, run.output["file_id"])
+    audit(db, cu.user, "rfp.bid_pack_downloaded", "rfp_workspace", run.workspace_id, file_id=f.id)
+    db.commit()
+    return Response(read_file(f), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{f.original_name}"'})
+
+
 def _latest_runs(db: Session, wid: int) -> dict:
     out = {}
     for key in A.DOC_AGENTS:

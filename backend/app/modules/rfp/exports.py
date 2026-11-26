@@ -1,3 +1,5 @@
+import io
+
 from app.exports import brand
 from app.modules.rfp import bidpack
 from app.modules.rfp.agents import DOC_AGENT_LABELS
@@ -134,6 +136,52 @@ def hw_boq_workbook(ws_name: str, params: dict, sizing: dict) -> bytes:
     ] + [["Note", n] for n in sizing.get("notes", [])]
     brand.write_table(wb, "Notes", ["Item", "Detail"], terms, [22, 110])
     return brand.workbook_bytes(wb)
+
+
+def bid_pack(ws_name: str, rows: list[tuple], runs: dict, bp: dict, sw_boq) -> tuple[bytes, list[dict]]:
+    """All bid outputs in one ZIP. sw_boq() returns the unpriced SW BOQ bytes or raises; a failed part is listed in
+    the manifest and README instead of stopping the pack. Returns (zip bytes, manifest)."""
+    import zipfile
+    from datetime import datetime
+
+    p, sizing = bp["params"], bp["sizing"]
+    who = p.get("customer_name") or ws_name
+    parts: list[tuple[str, object]] = [
+        ("01 Bid synopsis and RFP analysis.docx", lambda: report_docx(ws_name, runs)),
+        ("02 Motadata scope matrix.xlsx", (lambda: scope_workbook(ws_name, rows, runs["scope"])) if runs.get("scope")
+         else "Motadata scope has not been run"),
+        ("03 Pre-bid queries (tender format).xlsx", (lambda: prebid_sheet(ws_name, runs["prebid"]))
+         if (runs.get("prebid") or {}).get("queries") else "Pre-bid queries have not been run"),
+        ("03 Pre-bid queries (tender format).docx", (lambda: prebid_docx(ws_name, runs["prebid"]))
+         if (runs.get("prebid") or {}).get("queries") else "Pre-bid queries have not been run"),
+        ("04 Compliance statement.xlsx", (lambda: compliance_sheet(ws_name, rows)) if rows else "No requirements yet"),
+        ("05 Hardware sizing.xlsx", (lambda: hw_sizing_workbook(ws_name, sizing)) if sizing.get("sites")
+         else sizing.get("error") or "No hardware sizing"),
+        ("06 Unpriced HW BOQ.xlsx", (lambda: hw_boq_workbook(ws_name, p, sizing)) if sizing.get("sites")
+         else sizing.get("error") or "No hardware sizing"),
+        ("07 Unpriced SW BOQ.xlsx", sw_boq),
+        ("Internal/RFP workspace (internal).xlsx", lambda: internal_workbook(ws_name, rows, runs)),
+    ]
+    manifest: list[dict] = []
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, make in parts:
+            if isinstance(make, str):
+                manifest.append({"name": name, "included": False, "note": make})
+                continue
+            try:
+                z.writestr(name, make())
+                manifest.append({"name": name, "included": True, "note": ""})
+            except Exception as e:  # one failed part must not lose the rest of the pack
+                manifest.append({"name": name, "included": False, "note": str(e)[:300] or e.__class__.__name__})
+        lines = [f"Bid pack - {who}", f"Workspace: {ws_name}", f"Generated: {datetime.now():%d %b %Y %H:%M}", "",
+                 "No prices are included in this pack.", "", "Files:"]
+        lines += [f"  [{'x' if m['included'] else ' '}] {m['name']}" + (f"  - not included: {m['note']}" if not m["included"] else "")
+                  for m in manifest]
+        lines += ["", "Confirmed bid parameters:"]
+        lines += [f"  {k}: {v}" for k, v in p.items()]
+        z.writestr("README.txt", "\n".join(lines) + "\n")
+    return buf.getvalue(), manifest
 
 
 def prebid_sheet(ws_name: str, prebid: dict) -> bytes:
