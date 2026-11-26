@@ -193,6 +193,9 @@ function Analysis({ wid, busy, run }: any) {
             </>}>
             {!r ? <p className="text-sm text-muted">Not run yet.</p>
               : k === "scope" ? <Scope wid={wid} out={r.output} />
+              : k === "architecture" ? <>
+                  <Output value={Object.fromEntries(Object.entries(r.output).filter(([x]) => !["motadata_sizing", "motadata_inputs"].includes(x)))} />
+                  {r.output.motadata_sizing && <HwSizing key={`${r.id}-${r.edited}`} wid={wid} hw={r.output.motadata_sizing} reload={reload} />}</>
               : k === "prebid" ? <Prebid key={`${r.id}-${r.edited}`} wid={wid} r={r} reload={reload} /> : <Output value={r.output} />}
           </Card>
         );
@@ -201,6 +204,60 @@ function Analysis({ wid, busy, run }: any) {
         <Textarea rows={24} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="mt-2"><Button variant="primary" onClick={() => api.put(`/rfp/agent-runs/${edit.id}`, { output: JSON.parse(text) }).then(() => { setEdit(null); reload(); })}>Save</Button></div>
       </Modal>
+    </div>
+  );
+}
+
+/** Motadata hardware sizing computed from the RFP's figures; inputs can be corrected and the sizing recomputed. */
+function HwSizing({ wid, hw, reload }: { wid: string; hw: any; reload: () => void }) {
+  const { can } = useSession();
+  const byName: Record<string, any> = Object.fromEntries((hw.inputs || []).map((i: any) => [i.name, i]));
+  const [vals, setVals] = useState<Record<string, string>>(
+    Object.fromEntries((hw.fields || []).map((f: any) => [f.name, byName[f.name] ? String(byName[f.name].value) : ""])));
+  const [editing, setEditing] = useState(false);
+  const [err, setErr] = useState("");
+  async function recompute() {
+    const inputs = (hw.fields || []).filter((f: any) => vals[f.name] !== "" && vals[f.name] !== undefined)
+      .map((f: any) => ({ name: f.name, value: Number(vals[f.name]), ref: byName[f.name]?.ref || "", note: byName[f.name]?.note || (byName[f.name] ? "" : "Entered on review") }));
+    if (inputs.some((i: any) => Number.isNaN(i.value))) { setErr("Enter numbers only."); return; }
+    try { await api.post(`/rfp/workspaces/${wid}/sizing`, { inputs }); setErr(""); setEditing(false); reload(); }
+    catch (e) { setErr((e as Error).message); }
+  }
+  return (
+    <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold">Motadata hardware sizing</span>
+        {hw.topology && <Badge tone="info">{hw.topology}</Badge>}
+        <Badge tone="neutral">{({ standalone: "Standalone", ha: "HA", dc_dr: "DC + DR", ha_dr: "HA + DR" } as Record<string, string>)[hw.architecture] || hw.architecture}</Badge>
+        {can("rfp.export") && hw.sites?.length > 0 && <Button onClick={() => download(`/rfp/workspaces/${wid}/export?kind=hw_sizing`)}><Download size={16} /> HW sizing (Excel)</Button>}
+        {can("rfp.edit") && <Button variant="ghost" onClick={() => setEditing(!editing)}>{editing ? "Close inputs" : "Edit inputs"}</Button>}
+      </div>
+      {hw.error && <Alert tone={hw.status === "out_of_range" ? "error" : "warning"}>{hw.error}</Alert>}
+      {err && <Alert tone="error">{err}</Alert>}
+      {(hw.sites || []).map((s: any) => (
+        <div key={s.title}><div className="mb-1 text-sm font-semibold">{s.title}</div>
+          <Table head={["Component", "Qty", "vCPU", "RAM (GB)", "Disk (GB)"]}>
+            {s.rows.map((row: any, i: number) => <tr key={i}><td>{row.n}</td><td>{row.q}</td><td>{row.c}</td><td>{row.r}</td><td>{row.k}</td></tr>)}
+          </Table></div>
+      ))}
+      {hw.retention && <p className="text-sm text-muted">Retention: {hw.retention}</p>}
+      {(hw.notes || []).length > 0 && <ul className="list-disc pl-5 text-sm">{hw.notes.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul>}
+      {!editing ? (
+        <Table head={["Input from the RFP", "Value", "Reference", "Note"]} empty="No sizing inputs found in the RFP.">
+          {(hw.inputs || []).map((i: any) => <tr key={i.name}><td>{i.label}</td><td className="font-semibold">{i.value}</td><td className="text-muted">{i.ref}</td><td className="text-sm text-muted">{i.note}</td></tr>)}
+        </Table>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {(hw.fields || []).map((f: any) => (
+              <Field key={f.name} label={`${f.label} · ${f.product}`} hint={byName[f.name]?.ref ? `RFP: ${byName[f.name].ref}` : undefined}>
+                <Input inputMode="decimal" value={vals[f.name] ?? ""} onChange={(e) => setVals({ ...vals, [f.name]: e.target.value })} />
+              </Field>
+            ))}
+          </div>
+          <div><Button variant="primary" onClick={recompute}>Recompute sizing</Button></div>
+        </div>
+      )}
     </div>
   );
 }

@@ -21,6 +21,14 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   standard exclusions, partner scope) from the Internal presales knowledge section. Shown on the Analysis tab with owner
   filters, as a Scope column on Requirements, in the internal workbook and report, and as a Scope matrix Excel download.
   Runs after compliance in full processing and corrigenda; uses the RFP analysis agent's model settings.
+- RFP Intelligence: **Motadata hardware sizing**. `app/modules/rfp/sizing_engine.py` is a Python port of the BOQ
+  Generator's sizing (ObserveOps slabs from the ObserveOps sizing page, ServiceOps tables, Vulnerability + Patch from
+  docs.motadata.com), checked against the original JavaScript: 0 differences over 3,000 random inputs; 120 of them are
+  kept as a parity test. The architecture agent now extracts named sizing inputs with RFP references (devices, log
+  GB/day or EPS, flows, APM, RUM, NCM, ping, technicians, assets, endpoints, vulnerability, sites, HA, DR, retention);
+  the hardware rows per site (DC active / standby / DR) come only from the engine. Inputs can be corrected on the
+  Analysis tab and the sizing recomputed (`POST /api/rfp/workspaces/{id}/sizing`). New HW sizing Excel download;
+  hardware table in the report.
 - Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, simple pull-work-push workflow on `main`,
   conflict handling, migration rules, conventions) and GitHub Actions checks after every push (backend tests on
   PostgreSQL 18 with pgvector, single migration head, frontend type check and build).

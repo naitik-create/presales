@@ -1,4 +1,5 @@
 """RFP agent prompts and output schemas (§8.4)."""
+from app.modules.rfp.hwsizing import INPUTS as HW_INPUTS
 from app.modules.rfp.bidpack import BID_FACTS, MODULES, NOT_STATED, PREBID_CATEGORIES, PREBID_FIELDS, SCOPE_OWNERS
 
 COMPLIANCE_STATUSES = ["Compliant", "Partially Compliant", "Non-Compliant", "Needs Product Validation", "Not Applicable"]
@@ -57,10 +58,17 @@ point to a single vendor, mandatory items Motadata does not make. Rate the impac
 ARCH_SCHEMA = _obj({
     "recommended_architecture": S, "components": SA, "prerequisites": SA, "ha_dr_needs": S,
     "sizing_inputs": {"type": "array", "items": _obj({"name": S, "value": {"type": "number"}, "ref": S})},
+    "motadata_inputs": {"type": "array", "items": _obj({
+        "name": {"type": "string", "enum": list(HW_INPUTS)}, "value": {"type": "number"}, "ref": S, "note": S})},
     "assumptions": SA, "source_ids": SA})
-ARCH_SYSTEM = """Recommend the Motadata deployment architecture for this RFP using only the knowledge sources supplied.
+ARCH_SYSTEM = f"""Recommend the Motadata deployment architecture for this RFP using only the knowledge sources supplied.
 Do not state hardware sizing figures: extract the sizing inputs (with the input names listed) and the platform computes sizing from the rule table.
-State every assumption."""
+State every assumption.
+
+motadata_inputs feed Motadata's hardware sizing calculator. Give each one the RFP states or clearly implies, with the
+reference; leave out the ones the RFP does not support. Add counts across sites and annexures (for example servers plus
+network devices plus databases for devices) and say how in note. Use 1 for yes on yes/no inputs. Inputs:
+{chr(10).join(f"- {k}: {label}" for k, (label, _p) in HW_INPUTS.items())}"""
 
 RISK_SCHEMA = _obj({"items": {"type": "array", "items": _obj({
     "category": {"type": "string", "enum": ["Product gap", "Integration limit", "Licence dependency", "Migration dependency",

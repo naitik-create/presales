@@ -84,6 +84,29 @@ def scope_workbook(ws_name: str, rows: list[tuple], scope: dict) -> bytes:
     return brand.workbook_bytes(wb)
 
 
+HW_HEADERS = ["Site", "Component", "Qty", "vCPU", "RAM (GB)", "Disk (GB)"]
+
+
+def hw_rows(sizing: dict) -> list[list]:
+    return [[site["title"], r["n"], r["q"], r["c"], r["r"], r["k"]] for site in sizing.get("sites", []) for r in site["rows"]]
+
+
+def hw_sizing_workbook(ws_name: str, sizing: dict) -> bytes:
+    wb = brand.new_workbook()
+    brand.write_table(wb, "Hardware sizing", HW_HEADERS, hw_rows(sizing), [36, 50, 7, 8, 10, 11],
+                      heading=f"Hardware sizing - {ws_name}")
+    brand.write_table(wb, "Sizing inputs", ["Input", "Value", "RFP reference", "Note"],
+                      [[i["label"], i["value"], i["ref"], i["note"]] for i in sizing.get("inputs", [])], [50, 12, 26, 60])
+    notes = [["Architecture", sizing.get("architecture", "")], ["ObserveOps topology", sizing.get("topology", "")],
+             ["Retention", sizing.get("retention", "")], ["Status", sizing.get("status", "")]]
+    if sizing.get("error"):
+        notes.append(["Error", sizing["error"]])
+    notes += [["Note", n] for n in sizing.get("notes", [])]
+    notes.append(["Source", "Motadata sizing rules (ObserveOps sizing page, ServiceOps sizing tables, docs.motadata.com)"])
+    brand.write_table(wb, "Notes", ["Item", "Detail"], notes, [22, 110])
+    return brand.workbook_bytes(wb)
+
+
 def prebid_sheet(ws_name: str, prebid: dict) -> bytes:
     """The queries to submit, in the column format the RFP prescribes (or the standard format)."""
     headers, rows = bidpack.prebid_table(prebid)
@@ -136,6 +159,16 @@ def report_docx(ws_name: str, runs: dict) -> bytes:
         doc.add_heading(DOC_AGENT_LABELS[key], level=1)
         if key == "scope":  # the full matrix is in the scope workbook; the report shows the summary
             out = {k: v for k, v in out.items() if k != "matrix"}
+        if key == "architecture":
+            hw = out.get("motadata_sizing")
+            out = {k: v for k, v in out.items() if k not in ("motadata_sizing", "motadata_inputs")}
+            if hw and hw.get("sites"):
+                doc.add_heading("Hardware sizing", level=3)
+                brand.add_table(doc, HW_HEADERS, hw_rows(hw))
+                for n in hw.get("notes", []):
+                    doc.add_paragraph(n, style="List Bullet")
+            elif hw and hw.get("error"):
+                doc.add_paragraph(f"Hardware sizing: {hw['error']}")
         if key == "prebid":
             brand.add_table(doc, ["Rank", "Submit", "Impact", "Reference", "Query"],
                             [[q.get("rank", ""), "Yes" if q in bidpack.selected_queries(out) else "", q.get("impact", ""),

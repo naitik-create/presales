@@ -22,7 +22,7 @@ from app.models.rfp import (RFPAgentRun, RFPComplianceResponse, RFPDocument, RFP
                             RFPWorkspace)
 from app.modules.knowledge.routes import add_pairs
 from app.modules.rfp import agents as A
-from app.modules.rfp import exports
+from app.modules.rfp import exports, hwsizing
 from app.modules.rfp.service import compliance_digest, workspace_cost
 from app.parsing.extract import docx_to_pdf, extract
 
@@ -311,6 +311,30 @@ def approve_agent_output(run_id: int, cu: CurrentUser = Depends(require("rfp.app
     return {"ok": True}
 
 
+@router.post("/workspaces/{wid}/sizing")
+def resize(wid: int, body: dict, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    """Recompute Motadata hardware sizing from edited inputs ([{name, value, ref, note}]) and save it on the latest
+    architecture run as an edit (which needs approval again)."""
+    ws = _ws(db, wid)
+    run = db.scalar(select(RFPAgentRun).where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == "architecture")
+                    .order_by(RFPAgentRun.id.desc()))
+    if not run:
+        raise HTTPException(400, "Run the architecture and sizing agent first")
+    items = [i for i in (body.get("inputs") or []) if isinstance(i, dict)]
+    for i in items:
+        try:
+            i["value"] = float(i.get("value") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"{i.get('name')}: enter a number")
+    out = dict(run.edited_output or run.output)
+    out["motadata_inputs"] = items
+    out["motadata_sizing"] = hwsizing.compute(items, ws.products or ["ObserveOps", "ServiceOps"])
+    run.edited_output, run.approved = out, False
+    audit(db, cu.user, "rfp.sizing_edited", "rfp_agent_run", run.id)
+    db.commit()
+    return out["motadata_sizing"]
+
+
 def _latest_runs(db: Session, wid: int) -> dict:
     out = {}
     for key in A.DOC_AGENTS:
@@ -454,6 +478,11 @@ def export(wid: int, kind: str = "compliance", cu: CurrentUser = Depends(require
         name = f"RFP analysis - {_safe(ws.name)}.docx"
         if kind == "report_pdf":
             data, mime, name = docx_to_pdf(data), "application/pdf", name.replace(".docx", ".pdf")
+    elif kind == "hw_sizing":
+        sizing = (_latest_runs(db, wid).get("architecture") or {}).get("motadata_sizing")
+        if not sizing:
+            raise HTTPException(400, "Run the architecture and sizing agent first")
+        data, mime, name = exports.hw_sizing_workbook(ws.name, sizing), XLSX, f"HW sizing - {_safe(ws.name)}.xlsx"
     elif kind == "scope":
         scope = _latest_runs(db, wid).get("scope")
         if not scope:

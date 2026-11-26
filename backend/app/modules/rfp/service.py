@@ -15,7 +15,7 @@ from app.models.knowledge import KnowledgeSection, SizingRule
 from app.models.rfp import RFPAgentRun, RFPComplianceResponse, RFPDocument, RFPRequirement, RFPWorkspace
 from app.modules.ask.sizing import apply_rules, required_inputs
 from app.modules.rfp import agents as A
-from app.modules.rfp import bidpack
+from app.modules.rfp import bidpack, hwsizing
 from app.common.text import normalise
 from app.parsing.extract import extract
 
@@ -213,6 +213,7 @@ def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
         inputs = {i["name"]: i["value"] for i in merged.get("sizing_inputs", [])}
         products = ws.products or ["ObserveOps"]
         merged["sizing"] = [{"product": p, **_sizing(db, p, inputs)} for p in products]
+        merged["motadata_sizing"] = hwsizing.compute(merged.get("motadata_inputs", []), ws.products or ["ObserveOps", "ServiceOps"])
         merged["citations"] = [h.citation() for h in hits if h.id in merged.get("source_ids", [])]
     return merged
 
