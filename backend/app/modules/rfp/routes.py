@@ -22,7 +22,7 @@ from app.models.rfp import (RFPAgentRun, RFPComplianceResponse, RFPDocument, RFP
                             RFPWorkspace)
 from app.modules.knowledge.routes import add_pairs
 from app.modules.rfp import agents as A
-from app.modules.rfp import exports, hwsizing
+from app.modules.rfp import bidparams, boq_client, exports, hwsizing
 from app.modules.rfp.service import compliance_digest, workspace_cost
 from app.parsing.extract import docx_to_pdf, extract
 
@@ -335,6 +335,95 @@ def resize(wid: int, body: dict, cu: CurrentUser = Depends(require("rfp.edit")),
     return out["motadata_sizing"]
 
 
+# ---------- bid parameters (review, confirm) and unpriced BOQs ----------
+BID_PARAMS = "bid_parameters"  # stored as an RFPAgentRun row: output = parameters, approved = confirmed
+
+
+def _params_run(db: Session, wid: int) -> RFPAgentRun | None:
+    return db.scalar(select(RFPAgentRun).where(RFPAgentRun.workspace_id == wid, RFPAgentRun.agent_key == BID_PARAMS)
+                     .order_by(RFPAgentRun.id.desc()))
+
+
+def _prefilled(db: Session, ws: RFPWorkspace) -> dict:
+    runs = _latest_runs(db, ws.id)
+    customer = db.get(CustomerContext, ws.customer_id).name if ws.customer_id else ""
+    arch = runs.get("architecture") or {}
+    inputs = (arch.get("motadata_sizing") or {}).get("inputs") or hwsizing.clean_inputs(arch.get("motadata_inputs") or [])
+    return bidparams.prefill(customer=customer, products=ws.products or [], analysis=runs.get("analysis") or {},
+                             scope=runs.get("scope") or {}, sizing_inputs=inputs)
+
+
+def _params_out(db: Session, ws: RFPWorkspace, run: RFPAgentRun | None) -> dict:
+    data = run.output if run else {**_prefilled(db, ws), "sizing": None}
+    if data.get("sizing") is None:
+        data = {**data, "sizing": bidparams.compute_sizing(data["params"], data["sizing_inputs"])}
+    boq_hints = (_latest_runs(db, ws.id).get("boq") or {}).get("lines", [])
+    return {**data, "saved": run is not None, "confirmed": bool(run and run.approved),
+            "confirmed_at": run.at if run and run.approved else None, "fields": bidparams.fields_meta(),
+            "sizing_fields": [{"name": k, "label": v[0], "product": v[1]} for k, v in hwsizing.INPUTS.items()],
+            "warnings": bidparams.warnings(data["params"]), "boq_hints": boq_hints}
+
+
+@router.get("/workspaces/{wid}/bid-parameters")
+def get_bid_parameters(wid: int, cu: CurrentUser = Depends(require("rfp.view")), db: Session = Depends(get_db)):
+    ws = _ws(db, wid)
+    return _params_out(db, ws, _params_run(db, wid))
+
+
+@router.put("/workspaces/{wid}/bid-parameters")
+def save_bid_parameters(wid: int, body: dict, cu: CurrentUser = Depends(require("rfp.edit")), db: Session = Depends(get_db)):
+    """Save edited parameters and sizing inputs as a new version; it needs confirming again."""
+    ws = _ws(db, wid)
+    current = _params_run(db, wid)
+    base = current.output if current else _prefilled(db, ws)
+    try:
+        params = bidparams.clean({**base["params"], **(body.get("params") or {})})
+        items = []
+        for i in body.get("sizing_inputs", base["sizing_inputs"]) or []:
+            if i.get("name") in hwsizing.INPUTS and str(i.get("value", "")).strip() != "":
+                items.append({"name": i["name"], "value": float(i["value"]), "ref": str(i.get("ref", ""))[:200],
+                              "note": str(i.get("note", ""))[:300]})
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, str(e) if str(e) else "Check the values entered")
+    sources = dict(base.get("sources") or {})
+    for k, v in params.items():
+        if base["params"].get(k) != v:
+            sources[k] = f"Edited by {cu.user.full_name or cu.user.username}"
+    out = {"params": params, "sources": sources, "notes": base.get("notes", []), "sizing_inputs": items,
+           "sizing": bidparams.compute_sizing(params, items)}
+    run = RFPAgentRun(workspace_id=wid, agent_key=BID_PARAMS, revision=ws.revision, output=out, approved=False)
+    db.add(run)
+    audit(db, cu.user, "rfp.bid_parameters_saved", "rfp_workspace", wid)
+    db.commit()
+    return _params_out(db, ws, run)
+
+
+@router.post("/workspaces/{wid}/bid-parameters/confirm")
+def confirm_bid_parameters(wid: int, body: dict | None = None, cu: CurrentUser = Depends(require("rfp.edit")),
+                           db: Session = Depends(get_db)):
+    ws = _ws(db, wid)
+    run = _params_run(db, wid)
+    if not run:
+        raise HTTPException(400, "Save the bid parameters first")
+    confirm = (body or {}).get("confirmed", True)
+    if confirm:
+        problems = [w for w in bidparams.warnings(run.output["params"]) if "will not be quoted" not in w]
+        if problems:
+            raise HTTPException(400, "Fix before confirming: " + " ".join(problems))
+    run.approved = bool(confirm)
+    run.at = utcnow()
+    audit(db, cu.user, "rfp.bid_parameters_confirmed" if confirm else "rfp.bid_parameters_unlocked", "rfp_workspace", wid)
+    db.commit()
+    return _params_out(db, ws, run)
+
+
+def _confirmed_params(db: Session, wid: int) -> dict:
+    run = _params_run(db, wid)
+    if not run or not run.approved:
+        raise HTTPException(400, "Confirm the bid parameters first (Bid parameters tab)")
+    return run.output
+
+
 def _latest_runs(db: Session, wid: int) -> dict:
     out = {}
     for key in A.DOC_AGENTS:
@@ -478,8 +567,23 @@ def export(wid: int, kind: str = "compliance", cu: CurrentUser = Depends(require
         name = f"RFP analysis - {_safe(ws.name)}.docx"
         if kind == "report_pdf":
             data, mime, name = docx_to_pdf(data), "application/pdf", name.replace(".docx", ".pdf")
+    elif kind == "sw_boq":
+        p = _confirmed_params(db, wid)["params"]
+        try:
+            data = boq_client.unpriced_boq(bidparams.boq_request(p))
+        except boq_client.BoqError as e:
+            raise HTTPException(502, str(e))
+        mime, name = XLSX, f"Unpriced SW BOQ - {_safe(p['customer_name'] or ws.name)}.xlsx"
+    elif kind == "hw_boq":
+        bp = _confirmed_params(db, wid)
+        if not bp["sizing"].get("sites"):
+            raise HTTPException(400, bp["sizing"].get("error") or "No hardware sizing for these parameters")
+        data, mime = exports.hw_boq_workbook(ws.name, bp["params"], bp["sizing"]), XLSX
+        name = f"Unpriced HW BOQ - {_safe(bp['params']['customer_name'] or ws.name)}.xlsx"
     elif kind == "hw_sizing":
-        sizing = (_latest_runs(db, wid).get("architecture") or {}).get("motadata_sizing")
+        bp_run = _params_run(db, wid)
+        sizing = bp_run.output["sizing"] if bp_run and bp_run.approved else \
+            (_latest_runs(db, wid).get("architecture") or {}).get("motadata_sizing")
         if not sizing:
             raise HTTPException(400, "Run the architecture and sizing agent first")
         data, mime, name = exports.hw_sizing_workbook(ws.name, sizing), XLSX, f"HW sizing - {_safe(ws.name)}.xlsx"

@@ -29,6 +29,14 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   the hardware rows per site (DC active / standby / DR) come only from the engine. Inputs can be corrected on the
   Analysis tab and the sizing recomputed (`POST /api/rfp/workspaces/{id}/sizing`). New HW sizing Excel download;
   hardware table in the report.
+- RFP Intelligence: **Bid parameters tab and unpriced BOQs**. One review screen with every figure the BOQs depend on
+  (customer, product line, licence type, AMC years, architecture, support window, onsite days, validity, ObserveOps and
+  ServiceOps licence quantities, hardware sizing inputs), pre-filled from the bid synopsis, Motadata scope and sizing
+  inputs, each showing where its value came from; BOQ minimums are checked as warnings. Save keeps every version;
+  Confirm locks it. Once confirmed: **Unpriced SW BOQ** comes from the BOQ Generator (172.16.12.103:5050) through its
+  existing download with `force_unpriced`, so SKUs, wording and T&C stay maintained there; **Unpriced HW BOQ** is built
+  from the sizing. Needs `BOQ_GENERATOR_URL`, `BOQ_GENERATOR_USERNAME`, `BOQ_GENERATOR_PASSWORD` in `backend/.env`
+  (see `.env.example`). Parameters are stored as an `rfp_agent_runs` row (`bid_parameters`), so no migration.
 - Team collaboration: `CONTRIBUTING.md` (module ownership, laptop setup, simple pull-work-push workflow on `main`,
   conflict handling, migration rules, conventions) and GitHub Actions checks after every push (backend tests on
   PostgreSQL 18 with pgvector, single migration head, frontend type check and build).

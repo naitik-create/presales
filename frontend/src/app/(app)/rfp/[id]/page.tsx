@@ -37,11 +37,12 @@ export default function WorkspacePage({ params }: { params: Promise<{ id: string
       {w.job?.status === "Failed" && <div className="mb-4"><Alert tone="error">Last job failed: {w.job.error}</Alert></div>}
       <Tabs active={tab} onChange={setTab} tabs={[
         { key: "documents", label: "Documents" }, { key: "requirements", label: "Requirements and answers" },
-        { key: "analysis", label: "Analysis" }, { key: "proposal", label: "Proposal" },
+        { key: "analysis", label: "Analysis" }, { key: "params", label: "Bid parameters" }, { key: "proposal", label: "Proposal" },
         { key: "export", label: "Export and submit" }]} />
       {tab === "documents" && <Documents w={w} reload={ws.reload} run={run} busy={!!running} />}
       {tab === "requirements" && <Requirements wid={id} busy={!!running} run={run} />}
       {tab === "analysis" && <Analysis wid={id} busy={!!running} run={run} />}
+      {tab === "params" && <BidParameters wid={id} />}
       {tab === "proposal" && <Proposal w={w} run={run} busy={!!running} />}
       {tab === "export" && <ExportTab w={w} run={run} />}
     </>
@@ -204,6 +205,99 @@ function Analysis({ wid, busy, run }: any) {
         <Textarea rows={24} value={text} onChange={(e) => setText(e.target.value)} />
         <div className="mt-2"><Button variant="primary" onClick={() => api.put(`/rfp/agent-runs/${edit.id}`, { output: JSON.parse(text) }).then(() => { setEdit(null); reload(); })}>Save</Button></div>
       </Modal>
+    </div>
+  );
+}
+
+/** Review screen: every figure the BOQs depend on, pre-filled from the RFP with where it came from. Confirm locks it
+ *  and enables the unpriced SW BOQ (from the BOQ Generator) and HW BOQ downloads. */
+function BidParameters({ wid }: { wid: string }) {
+  const { can } = useSession();
+  const { data, reload } = useApi<any>(`/rfp/workspaces/${wid}/bid-parameters`);
+  if (!data) return <Spinner />;
+  return <BidParametersForm key={`${data.saved}-${data.confirmed_at}-${JSON.stringify(data.params)}`} wid={wid} data={data} reload={reload} canEdit={can("rfp.edit")} canExport={can("rfp.export")} />;
+}
+
+function BidParametersForm({ wid, data, reload, canEdit, canExport }: any) {
+  const [params, setParams] = useState<Record<string, any>>(data.params);
+  const initialSizing: Record<string, string> = Object.fromEntries((data.sizing_inputs || []).map((i: any) => [i.name, String(i.value)]));
+  const [sizing, setSizing] = useState<Record<string, string>>(initialSizing);
+  const [dirty, setDirty] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const locked = data.confirmed;
+  const refs: Record<string, any> = Object.fromEntries((data.sizing_inputs || []).map((i: any) => [i.name, i]));
+  const groups: string[] = Array.from(new Set((data.fields as any[]).map((f) => f.group)));
+  const set = (k: string, v: any) => { setParams({ ...params, [k]: v }); setDirty(true); };
+  const act = async (fn: () => Promise<any>) => {
+    setBusy(true);
+    try { await fn(); setErr(""); reload(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  const save = () => act(() => api.put(`/rfp/workspaces/${wid}/bid-parameters`, {
+    params, sizing_inputs: Object.entries(sizing).filter(([, v]) => v !== "").map(([name, value]) => ({
+      name, value: Number(value), ref: refs[name]?.ref || "Entered on review", note: refs[name]?.note || "" })) }));
+  const confirm = (confirmed: boolean) => act(() => api.post(`/rfp/workspaces/${wid}/bid-parameters/confirm`, { confirmed }));
+  const hw = data.sizing;
+  return (
+    <div className="flex flex-col gap-4">
+      {err && <Alert tone="error">{err}</Alert>}
+      {locked ? <Alert tone="success">Confirmed {fmtDate(data.confirmed_at, true)}. Unlock to change.</Alert>
+        : <Alert tone="info">Check every figure against the RFP, save, then confirm. Values marked Default were not found in the RFP.</Alert>}
+      {(data.warnings || []).map((w: string, i: number) => <Alert key={i} tone="warning">{w}</Alert>)}
+      {(data.notes || []).map((n: string, i: number) => <Alert key={`n${i}`} tone="info">{n}</Alert>)}
+      <div className="flex flex-wrap gap-2">
+        {canEdit && !locked && <Button variant="primary" disabled={busy || (!dirty && data.saved)} onClick={save}>{data.saved ? "Save changes" : "Save"}</Button>}
+        {canEdit && !locked && <Button disabled={busy || dirty || !data.saved} onClick={() => confirm(true)}><CheckCheck size={16} /> Confirm</Button>}
+        {canEdit && locked && <Button disabled={busy} onClick={() => confirm(false)}>Unlock</Button>}
+        {canExport && <>
+          <Button disabled={!locked || busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=sw_boq`).catch((e: Error) => setErr(e.message))}><Download size={16} /> Unpriced SW BOQ</Button>
+          <Button disabled={!locked || busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=hw_boq`).catch((e: Error) => setErr(e.message))}><Download size={16} /> Unpriced HW BOQ</Button>
+          <Button disabled={busy} onClick={() => download(`/rfp/workspaces/${wid}/export?kind=hw_sizing`).catch((e: Error) => setErr(e.message))}><Download size={16} /> HW sizing</Button>
+        </>}
+        {dirty && <span className="self-center text-sm text-muted">Unsaved changes</span>}
+      </div>
+      {groups.map((g) => (
+        <Card key={g} title={g}>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {(data.fields as any[]).filter((f) => f.group === g).map((f) => (
+              <Field key={f.name} label={f.label} hint={data.sources?.[f.name]}>
+                {f.kind === "choice"
+                  ? <Select value={params[f.name]} disabled={locked || !canEdit} onChange={(e) => set(f.name, e.target.value)} options={f.options} />
+                  : <Input value={params[f.name] ?? ""} disabled={locked || !canEdit} inputMode={f.kind === "int" ? "numeric" : undefined}
+                      onChange={(e) => set(f.name, f.kind === "int" ? e.target.value.replace(/[^0-9]/g, "") : e.target.value)} />}
+              </Field>
+            ))}
+          </div>
+        </Card>
+      ))}
+      <Card title="Hardware sizing inputs">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {(data.sizing_fields as any[]).filter((f) => !["ha", "dr"].includes(f.name)).map((f) => (
+            <Field key={f.name} label={`${f.label} · ${f.product}`} hint={refs[f.name]?.ref ? `RFP ${refs[f.name].ref}` : undefined}>
+              <Input value={sizing[f.name] ?? ""} disabled={locked || !canEdit} inputMode="decimal"
+                onChange={(e) => { setSizing({ ...sizing, [f.name]: e.target.value.replace(/[^0-9.]/g, "") }); setDirty(true); }} />
+            </Field>
+          ))}
+        </div>
+        <p className="mt-2 text-sm text-muted">HA and DR follow the deployment architecture above. Save to recompute.</p>
+      </Card>
+      <Card title={`Hardware (${hw?.topology || "no ObserveOps"} · ${({ standalone: "Standalone", ha: "HA", dc_dr: "DC + DR", ha_dr: "HA + DR" } as Record<string, string>)[hw?.architecture] || ""})`}>
+        {hw?.error && <Alert tone={hw.status === "out_of_range" ? "error" : "warning"}>{hw.error}</Alert>}
+        {(hw?.sites || []).map((s: any) => (
+          <div key={s.title} className="mb-3"><div className="mb-1 text-sm font-semibold">{s.title}</div>
+            <Table head={["Component", "Qty", "vCPU", "RAM (GB)", "Disk (GB)"]}>
+              {s.rows.map((r: any, i: number) => <tr key={i}><td>{r.n}</td><td>{r.q}</td><td>{r.c}</td><td>{r.r}</td><td>{r.k}</td></tr>)}
+            </Table></div>
+        ))}
+        {(hw?.notes || []).length > 0 && <ul className="list-disc pl-5 text-sm">{hw.notes.map((n: string, i: number) => <li key={i}>{n}</li>)}</ul>}
+      </Card>
+      {(data.boq_hints || []).length > 0 && (
+        <Card title="For reference: BOQ lines the RFP analysis suggested">
+          <Table head={["Product", "Module", "Licence metric", "Quantity", "Reference"]}>
+            {data.boq_hints.map((l: any, i: number) => <tr key={i}><td>{l.product}</td><td>{l.module}</td><td>{l.licence_metric}</td><td>{l.quantity}</td><td className="text-muted">{l.ref}</td></tr>)}
+          </Table>
+        </Card>
+      )}
     </div>
   );
 }

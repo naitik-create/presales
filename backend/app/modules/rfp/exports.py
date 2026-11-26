@@ -107,6 +107,35 @@ def hw_sizing_workbook(ws_name: str, sizing: dict) -> bytes:
     return brand.workbook_bytes(wb)
 
 
+ARCH_LABEL = {"standalone": "Standalone", "ha": "High availability (HA)", "dr": "Disaster recovery (DR)",
+              "dc_dr": "DC + DR", "ha_dr": "HA + DR"}
+
+
+def hw_boq_workbook(ws_name: str, params: dict, sizing: dict) -> bytes:
+    """Unpriced hardware BOQ: one line per server per site, specification in words, quantity; no prices."""
+    rows, sr = [], 0
+    for site in sizing.get("sites", []):
+        rows.append(["", site["title"], "", ""])
+        for r in site["rows"]:
+            sr += 1
+            rows.append([sr, r["n"], f"{r['c']} vCPU, {r['r']} GB RAM, {r['k']} GB usable disk", r["q"]])
+    wb = brand.new_workbook()
+    brand.write_table(wb, "HW BOQ (unpriced)", ["Sr. No.", "Item", "Minimum specification", "Qty"], rows, [8, 50, 52, 7],
+                      heading=f"Hardware BOQ (unpriced) - {params.get('customer_name') or ws_name}")
+    terms = [
+        ["Architecture", ARCH_LABEL.get(params.get("architecture"), params.get("architecture", ""))],
+        ["ObserveOps topology", sizing.get("topology", "")],
+        ["Retention", sizing.get("retention", "")],
+        ["Servers", "Physical or virtual. Specifications are the minimum per server; storage is usable capacity "
+                    "after RAID, on SSD for ObserveOps data."],
+        ["Not included", "Operating system and database licences, racks, network and backup equipment are supplied "
+                         "by the partner or customer as per the RFP."],
+        ["Source", "Motadata sizing rules (ObserveOps sizing page, ServiceOps sizing tables, docs.motadata.com)"],
+    ] + [["Note", n] for n in sizing.get("notes", [])]
+    brand.write_table(wb, "Notes", ["Item", "Detail"], terms, [22, 110])
+    return brand.workbook_bytes(wb)
+
+
 def prebid_sheet(ws_name: str, prebid: dict) -> bytes:
     """The queries to submit, in the column format the RFP prescribes (or the standard format)."""
     headers, rows = bidpack.prebid_table(prebid)
