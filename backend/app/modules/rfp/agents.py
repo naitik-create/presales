@@ -114,7 +114,11 @@ ServiceOps) and its bidding partner.
    For each: document, section, page and clause number as printed; clause_text quoted exactly; query written politely
    and specifically as the bidder would submit it; suggested_change is the wording or relaxation the bidder asks for
    (empty if it is a pure clarification); reason is internal and explains why the query matters to Motadata.
-   ref combines document, page and clause for display."""
+   ref combines document, page and clause for display.
+
+3. Past queries. past_prebid_queries (when supplied) are queries raised in earlier tenders and the authority's
+   replies. Where this RFP has the same issue, reuse the wording that worked and mention in reason that it was
+   accepted before (when the reply shows it was). Never copy another customer's name or clause numbers."""
 
 ITEM = _obj({"item": S, "ref": S})
 SCOPE_SCHEMA = _obj({

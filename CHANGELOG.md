@@ -50,6 +50,22 @@ Each release is tagged in git as `vX.Y.Z`; the current version is in the `VERSIO
   synopsis and scope; pre-bid queries after synopsis). Every edit, accepted revision or restore is a new version with
   history and restore. When an approved step changes or is reopened, the approved steps built on it are reopened and
   marked "Needs review" with the reason; corrigenda and revised RFPs do the same.
+- Knowledge Hub: **Docs sites** (new tab and "Add docs site"). A whole documentation site such as
+  docs.motadata.com/observeops-docs/ is registered once; its pages are found from the sitemap (or by following links
+  when there is none), each page is indexed as its own source so answers cite the exact page, and navigation
+  furniture (table of contents, breadcrumbs, previous / next) is left out. Sitemaps that list pages under another host
+  (as docs.motadata.com does) are handled. Sync again to pick up changes: only pages whose text changed are processed,
+  new pages are added and pages no longer on the site are disabled; each sync's report lists new, changed, removed and
+  failed pages. Approving the site approves all its pages; label older product sites "Older product". Polite fetching
+  (one page at a time, configurable pause, page limit). When the server has no internet, a stand-alone script
+  (download from the site, Python 3 only) saves the site to a ZIP on any laptop, and "Import ZIP" indexes it the same
+  way. Sites and page settings use existing tables (no migration). Weekly automatic sync is not scheduled yet.
+- Knowledge Hub: **Import past pre-bid queries**. A past tender's pre-bid query sheet (Excel, or Word with a table) is
+  read into queries with the clause, suggested change and the authority's reply; the columns found are shown before
+  importing. Stored in Internal presales knowledge as "Past pre-bid queries - <customer>" (awaiting approval). The
+  pre-bid query agent now reuses wording from approved past queries on the same issues, and the RFP chat finds them.
+- Submitted RFP repository: the compliance sheet is checked on selection (columns found, number of pairs, sample),
+  Word tables are accepted, and "Save and add another" speeds up adding several past bids.
 - RFP Intelligence: **Ask this RFP** chat (button in the workspace header, a side panel available on every tab).
   Answers questions about one tender from its RFP and corrigendum text, its requirements with Motadata's compliance
   answers, the team's working outputs (synopsis, scope, key considerations, pre-bid queries, bid parameters, hardware

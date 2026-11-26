@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { Download, Plus, Upload } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -82,8 +82,22 @@ function Submitted() {
   const [view, setView] = useState<number | null>(null);
   const detail = useApi<any>(view ? `/knowledge/submitted/${view}` : null, [view]);
   const [error, setError] = useState("");
-  async function upload(form: FormData) {
-    try { await api.upload("/knowledge/submitted", form); setOpen(false); reload(); } catch (e) { setError((e as Error).message); }
+  const [check, setCheck] = useState<any | null>(null);
+  const [saved, setSaved] = useState("");
+  async function upload(form: FormData, another: boolean, el: HTMLFormElement) {
+    setError("");
+    try {
+      const r = await api.upload("/knowledge/submitted", form);
+      reload(); setCheck(null);
+      if (another) { el.reset(); setSaved(`Saved ${r.customer}: ${r.pairs} answers. Add the next one.`); }
+      else { setOpen(false); setSaved(""); }
+    } catch (e) { setError((e as Error).message); }
+  }
+  async function preview(f: File | undefined) {
+    setCheck(null);
+    if (!f) return;
+    const fd = new FormData(); fd.set("compliance_sheet", f);
+    try { setCheck(await api.upload("/knowledge/submitted/preview", fd)); } catch (e) { setError((e as Error).message); }
   }
   return (
     <>
@@ -105,9 +119,14 @@ function Submitted() {
           ))}
         </Table>
       )}
-      <Modal open={open} title="Add past RFP" onClose={() => setOpen(false)}>
-        <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); upload(new FormData(e.currentTarget)); }}>
+      <Modal open={open} title="Add past RFP" onClose={() => { setOpen(false); setCheck(null); setSaved(""); }}>
+        <form className="flex flex-col gap-4" onSubmit={(e) => {
+          e.preventDefault();
+          const another = (e.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "another";
+          upload(new FormData(e.currentTarget), another, e.currentTarget);
+        }}>
           {error && <Alert tone="error">{error}</Alert>}
+          {saved && <Alert tone="success">{saved}</Alert>}
           <div className="grid grid-cols-2 gap-4">
             <Field label="Customer"><Input name="customer" required /></Field>
             <Field label="Industry"><Input name="industry" /></Field>
@@ -115,10 +134,23 @@ function Submitted() {
             <Field label="Product version"><Input name="product_version" /></Field>
           </div>
           <Field label="Title"><Input name="title" /></Field>
-          <Field label="Compliance sheet (XLSX/XLS/CSV)" hint="Stored as requirement and response pairs, each searchable on its own."><input type="file" name="compliance_sheet" accept=".xlsx,.xls,.csv" /></Field>
+          <Field label="Compliance sheet (Excel, CSV, or Word with a table)" hint="Stored as requirement and response pairs, each searchable on its own. PDF cannot be read into pairs.">
+            <input type="file" name="compliance_sheet" accept=".xlsx,.xls,.csv,.docx" onChange={(e) => preview(e.target.files?.[0])} /></Field>
+          {check && (check.pairs ? (
+            <div className="flex flex-col gap-2 text-sm">
+              <Alert tone="success">{check.pairs} requirement and answer pairs will be imported. Check the columns:</Alert>
+              {check.columns.map((c: any, i: number) => (
+                <div key={i} className="flex flex-wrap gap-1"><span className="text-muted">{c.sheet}:</span>
+                  <Badge tone="neutral">Requirement ← “{c.requirement}”</Badge><Badge tone="neutral">Compliance ← “{c.status}”</Badge>
+                  {c.response && <Badge tone="neutral">Remarks ← “{c.response}”</Badge>}{c.ref && <Badge tone="neutral">Ref ← “{c.ref}”</Badge>}</div>))}
+              <Table head={["Requirement", "Compliance", "Remarks"]}>{check.sample.map((p: any, i: number) => (
+                <tr key={i}><td className="text-xs">{p.requirement}</td><td className="text-xs">{p.status}</td><td className="text-xs text-muted">{p.response}</td></tr>))}</Table>
+            </div>)
+            : <Alert tone="warning">No pairs found. The sheet needs a header row with a requirement / specification column and a compliance column.</Alert>)}
           <Field label="RFP and response documents"><input type="file" name="documents" multiple /></Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="held_back_for_testing" value="true" /> Hold back for testing (not used for answers)</label>
-          <div><Button variant="primary" type="submit">Save</Button></div>
+          <div className="flex gap-2"><Button variant="primary" type="submit" value="close">Save</Button>
+            <Button type="submit" value="another">Save and add another</Button></div>
         </form>
       </Modal>
       <Modal open={!!view} title={detail.data ? `${detail.data.customer} Â· ${fmtDate(detail.data.submitted_on)}` : "Submitted RFP"} onClose={() => setView(null)} wide>

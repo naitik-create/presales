@@ -83,7 +83,7 @@ generation is versioned.
   proposed actions shown as a diff; on **Apply** they edit the agent output / parameters / answer and re-run only the
   affected outputs.
 
-### G9. Knowledge: whole-site docs crawl and past experience
+### G9. Knowledge: whole-site docs crawl and past experience (done 2026-11-26 except the weekly timer)
 * Knowledge Hub "Add site": crawl a domain or path (sitemap first, then links), page limit, weekly re-sync, only
   changed pages re-indexed. Used for docs.motadata.com.
 * If .159 has no internet: crawl from a machine that has, import as a ZIP.

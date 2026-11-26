@@ -239,6 +239,30 @@ def run_considerations(db: Session, ws: RFPWorkspace, job: Job) -> dict:
     return out
 
 
+PAST_PREBID_TOPICS = ["OEM eligibility turnover MAF certification relaxation", "penalty liquidated damages SLA cap",
+                      "payment terms milestones", "quantity sizing devices licences clarification",
+                      "log retention storage hardware", "specification restrictive vendor specific", "timeline go-live"]
+
+
+def past_prebid_material(db: Session) -> str:
+    """Queries the team raised in past bids (imported in Knowledge Hub, approved), found per common topic."""
+    from app.modules.knowledge.prebid_sheet import TITLE_PREFIX
+    allowed = set(db.scalars(select(KnowledgeSection.key)))
+    seen, hits = set(), []
+    for topic in PAST_PREBID_TOPICS:
+        for h in retrieval.search(db, f"pre-bid query raised {topic}", allowed, sections=["internal_presales_knowledge"],
+                                  top_k=4, id_prefix="Q"):
+            if h.title.startswith(TITLE_PREFIX) and h.chunk_id not in seen:
+                seen.add(h.chunk_id)
+                hits.append(h)
+    if not hits:
+        return ""
+    for i, h in enumerate(hits[:16], start=1):
+        h.id = f"Q{i}"
+    return (f"\n<past_prebid_queries note=\"queries Motadata and partners raised in earlier tenders, with the "
+            f"authority's reply where known\">\n{retrieval.format_hits(hits[:16])}\n</past_prebid_queries>")
+
+
 def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
     if key == "scope":
         return run_scope(db, ws, job)
@@ -256,6 +280,8 @@ def run_doc_agent(db: Session, ws: RFPWorkspace, key: str, job: Job) -> dict:
              "pqtq": "certifications OEM support experience", "boq": "licensing model licence metrics modules"}[key]
         hits = retrieval.search(db, q, allowed, top_k=8)
         extra += f"\n<knowledge>\n{retrieval.format_hits(hits)}\n</knowledge>"
+    if key == "prebid":
+        extra += past_prebid_material(db)
     sys = system
     if key == "architecture":
         names = required_inputs(list(db.scalars(select(SizingRule).where(SizingRule.active.is_(True)))))

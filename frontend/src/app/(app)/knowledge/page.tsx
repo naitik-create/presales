@@ -6,6 +6,7 @@ import { Alert, Badge, Button, buttonClass, cx, Drawer, Field, Input, Modal, Num
 import { api, download, fmtDate } from "@/lib/api";
 import { useApi } from "@/lib/hooks";
 import { useSession } from "@/lib/session";
+import { AddSiteDrawer, PrebidImport, Sites } from "./sites";
 
 type Panel = "" | "upload" | "url" | "section";
 const PRODUCTS = ["Both", "ObserveOps", "ServiceOps"];
@@ -41,6 +42,10 @@ function KnowledgeHome() {
   const waiting = (pending.data || []).filter((s) => s.ingest_status === "Ready").length;
   const [panel, setPanel] = useState<Panel>("");
   const [refresh, setRefresh] = useState(0);
+  const [site, setSite] = useState<number | null>(null);
+  const [addSite, setAddSite] = useState(false);
+  const [prebid, setPrebid] = useState(false);
+  const openSite = (id: number) => { setSite(id); setView("sites"); };
 
   return (
     <>
@@ -49,21 +54,27 @@ function KnowledgeHome() {
           <h1 className="text-h4">Knowledge Hub</h1>
           <p className="text-sm text-muted">Approved Motadata material that Ask Motadata, RFP Intelligence and Demo Intelligence answer from.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {can("knowledge.upload") && <Button variant="ghost" onClick={() => setPrebid(true)}><FileText size={14} /> Import pre-bid queries</Button>}
+          {can("knowledge.register_url") && <Button onClick={() => setAddSite(true)}><Globe size={14} /> Add docs site</Button>}
           {can("knowledge.register_url") && <Button onClick={() => setPanel("url")}><Link2 size={14} /> Add URL</Button>}
           {can("knowledge.upload") && <Button variant="primary" onClick={() => setPanel("upload")}><Upload size={14} /> Upload file</Button>}
         </div>
       </div>
       <Tabs active={view} onChange={setView} tabs={[
         { key: "sources", label: "Sources" },
+        { key: "sites", label: "Docs sites" },
         ...(can("knowledge.approve") ? [{ key: "approval", label: waiting ? `Approvals (${waiting})` : "Approvals" }] : []),
         { key: "sizing", label: "Sizing rules" },
         { key: "search", label: "Test search" },
       ]} />
-      {view === "sources" && <Sources key={refresh} initialSource={params.get("source")} onNewSection={() => setPanel("section")} onAdd={setPanel} />}
+      {view === "sources" && <Sources key={refresh} initialSource={params.get("source")} onNewSection={() => setPanel("section")} onAdd={setPanel} onOpenSite={openSite} />}
+      {view === "sites" && <Sites key={`s${refresh}`} onAdd={() => setAddSite(true)} open={site} setOpen={setSite} />}
       {view === "approval" && <Approvals onChanged={() => pending.reload()} />}
       {view === "sizing" && <Sizing />}
       {view === "search" && <TestSearch />}
+      <AddSiteDrawer open={addSite} onClose={() => setAddSite(false)} onDone={(id) => { setAddSite(false); setRefresh((r) => r + 1); openSite(id); }} />
+      <PrebidImport open={prebid} onClose={() => setPrebid(false)} onDone={() => { setPrebid(false); setRefresh((r) => r + 1); pending.reload(); }} />
       <AddPanels panel={panel} onClose={() => setPanel("")} onDone={() => { setPanel(""); setRefresh((r) => r + 1); pending.reload(); }} />
     </>
   );
@@ -80,7 +91,7 @@ function EmptyState({ icon, title, text, children }: { icon: ReactNode; title: s
   );
 }
 
-function Sources({ initialSource, onNewSection, onAdd }: { initialSource?: string | null; onNewSection: () => void; onAdd: (p: Panel) => void }) {
+function Sources({ initialSource, onNewSection, onAdd, onOpenSite }: { initialSource?: string | null; onNewSection: () => void; onAdd: (p: Panel) => void; onOpenSite: (id: number) => void }) {
   const { can } = useSession();
   const sections = useApi<any[]>("/knowledge/sections");
   const [section, setSection] = useState("");
@@ -155,13 +166,13 @@ function Sources({ initialSource, onNewSection, onAdd }: { initialSource?: strin
               </thead>
               <tbody>
                 {shown.map((s) => (
-                  <tr key={s.id} onClick={() => setOpen(s.id)} className="cursor-pointer border-b border-lightborder last:border-b-0 hover:bg-offwhite">
+                  <tr key={s.id} onClick={() => s.kind === "site" ? onOpenSite(s.id) : setOpen(s.id)} className="cursor-pointer border-b border-lightborder last:border-b-0 hover:bg-offwhite">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">{s.kind === "url" ? <Globe size={16} /> : <FileText size={16} />}</span>
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-mono-100 text-mono-600">{s.kind === "url" || s.kind === "site" ? <Globe size={16} /> : <FileText size={16} />}</span>
                         <div className="min-w-0">
                           <div className="truncate font-semibold">{s.title}</div>
-                          <div className="truncate text-muted">{s.kind === "url" ? "Web page" : s.document_type || "Document"}{s.duplicate_of && " · possible duplicate"}</div>
+                          <div className="truncate text-muted">{s.kind === "site" ? "Docs site · " + s.url : s.kind === "url" ? "Web page" : s.document_type || "Document"}{s.duplicate_of && " · possible duplicate"}</div>
                         </div>
                       </div>
                     </td>

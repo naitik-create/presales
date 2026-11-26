@@ -1,5 +1,8 @@
+import io
 import re
+import zipfile
 from datetime import date
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -17,8 +20,10 @@ from app.db import get_db, utcnow
 from app.models.core import Job, Permission, Role, StoredFile
 from app.models.knowledge import (DocumentChunk, DocumentVersion, KnowledgeSection, KnowledgeSource, SourceApproval,
                                   SubmittedRequirementResponse, SubmittedRFP)
-from app.modules.knowledge.compliance_sheet import parse_compliance_sheet
+from app.modules.knowledge import prebid_sheet, site_sync, sites
+from app.modules.knowledge.compliance_sheet import parse_compliance_sheet, preview_compliance_sheet
 from app.modules.knowledge.service import domain_allowed, section_stats
+from app.parsing.extract import ExtractionError, extract
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -110,6 +115,7 @@ def list_sources(section_id: int | None = None, status: str | None = None, q: st
         query = query.where(KnowledgeSource.status == status)
     if q:
         query = query.where(KnowledgeSource.title.ilike(f"%{q}%"))
+    query = query.where(KnowledgeSource.kind != "page")  # pages are listed under their docs site
     return [source_out(s, sec) for s, sec in db.execute(query.order_by(KnowledgeSource.updated_at.desc()).limit(500))]
 
 
@@ -210,6 +216,8 @@ def register_url(body: UrlIn, cu: CurrentUser = Depends(require("knowledge.regis
 def resync(source_id: int, cu: CurrentUser = Depends(require("knowledge.register_url")), db: Session = Depends(get_db)):
     s = db.get(KnowledgeSource, source_id) or _404()
     _section_or_403(db, cu, s.section_id)
+    if s.kind == "site":
+        return {"job_id": _site_job(db, s, cu, {"mode": "crawl"}).id}
     if s.kind != "url":
         raise HTTPException(400, "Only URL sources can be re-synced")
     job = _new_version(db, s, None, cu.id)
@@ -234,8 +242,9 @@ def decide(source_id: int, action: str, body: DecisionIn, cu: CurrentUser = Depe
     s.status = status
     if action == "approve":
         s.approved_by, s.approved_at = cu.id, utcnow()
+    pages = site_sync.cascade_status(db, s, status, cu.id) if s.kind == "site" else 0
     db.add(SourceApproval(source_id=s.id, action=action, by_user=cu.id, note=body.note))
-    audit(db, cu.user, f"knowledge.{action}", "knowledge_source", s.id, title=s.title, note=body.note)
+    audit(db, cu.user, f"knowledge.{action}", "knowledge_source", s.id, title=s.title, note=body.note, pages=pages)
     db.commit()
     return source_out(s)
 
@@ -257,6 +266,219 @@ def download(source_id: int, version: int | None = None, cu: CurrentUser = Depen
 def test_search(q: str, section: str | None = None, cu: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
     hits = retrieval.search(db, q, cu.section_keys(), sections=[section] if section else None, top_k=10)
     return [{**h.citation(), "score": h.score, "text": h.text[:600]} for h in hits]
+
+
+# ---------- documentation sites (whole-site crawl, ZIP import) ----------
+class SiteIn(BaseModel):
+    section_id: int
+    url: str
+    title: str = ""
+    product: str = "Both"
+    product_version: str = ""
+    label: str = ""  # e.g. "Older product"
+    page_limit: int = sites.DEFAULT_LIMIT
+    delay_ms: int = sites.DEFAULT_DELAY_MS
+    fetch_now: bool = True  # False when the server has no internet and the pages come as a ZIP
+
+
+def _site_out(db: Session, s: KnowledgeSource, sec: KnowledgeSection | None = None) -> dict:
+    cfg = site_sync.config(db, s.id)
+    job = db.scalar(select(Job).where(Job.kind == "knowledge.site_sync", Job.ref_type == "knowledge_source",
+                                      Job.ref_id == s.id).order_by(Job.id.desc()))
+    return {**source_out(s, sec), "page_limit": cfg["page_limit"], "delay_ms": cfg["delay_ms"], "report": cfg["report"],
+            "pages": site_sync.page_counts(db, s),
+            "job": {"id": job.id, "status": job.status, "progress": job.progress, "message": job.message,
+                    "error": job.error.split("\n")[0] if job.error else ""} if job else None}
+
+
+def _site_job(db: Session, s: KnowledgeSource, cu: CurrentUser, payload: dict) -> Job:
+    running = db.scalar(select(Job).where(Job.kind == "knowledge.site_sync", Job.ref_type == "knowledge_source",
+                                          Job.ref_id == s.id, Job.status.in_(["Queued", "Processing"])))
+    if running:
+        raise HTTPException(400, "A sync is already queued or running for this site")
+    s.ingest_status = "Queued"
+    job = enqueue(db, "knowledge.site_sync", {"site_id": s.id, **payload}, user_id=cu.id, ref_type="knowledge_source",
+                  ref_id=s.id)
+    audit(db, cu.user, "knowledge.site_sync_started", "knowledge_source", s.id, mode=payload.get("mode"))
+    db.commit()
+    return job
+
+
+def _site(db: Session, cu: CurrentUser, sid: int) -> tuple[KnowledgeSource, KnowledgeSection]:
+    s = db.get(KnowledgeSource, sid)
+    if not s or s.kind != "site":
+        raise HTTPException(404, "Site not found")
+    return s, _section_or_403(db, cu, s.section_id)
+
+
+@router.get("/sites")
+def list_sites(cu: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows = db.execute(select(KnowledgeSource, KnowledgeSection).join(KnowledgeSection, KnowledgeSection.id == KnowledgeSource.section_id)
+                      .where(KnowledgeSource.kind == "site").order_by(KnowledgeSource.title)).all()
+    keys = cu.section_keys()
+    return [_site_out(db, s, sec) for s, sec in rows if sec.key in keys or cu.has("knowledge.manage_sections")]
+
+
+@router.post("/sites")
+def create_site(body: SiteIn, cu: CurrentUser = Depends(require("knowledge.register_url")), db: Session = Depends(get_db)):
+    """Register a documentation site; its pages are found from the sitemap (or links) and indexed by a sync job."""
+    _section_or_403(db, cu, body.section_id)
+    try:
+        base = sites.base_url(body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not domain_allowed(db, base):
+        raise HTTPException(400, "This domain is not on the allowed list. An administrator can add it in Settings.")
+    for other in db.scalars(select(KnowledgeSource).where(KnowledgeSource.kind == "site")):
+        if base.startswith(other.url) or other.url.startswith(base):
+            raise HTTPException(400, f"This overlaps the site already registered: {other.title} ({other.url})")
+    s = KnowledgeSource(section_id=body.section_id, kind="site", url=base, title=body.title or base,
+                        product=body.product, product_version=body.product_version, label=body.label,
+                        document_type="Online documentation", created_by=cu.id, ingest_status="Ready" if not body.fetch_now else "Queued")
+    db.add(s)
+    db.flush()
+    site_sync.save_config(db, s.id, {"page_limit": max(1, min(body.page_limit, sites.MAX_LIMIT)),
+                                     "delay_ms": max(100, min(body.delay_ms, 5000))})
+    audit(db, cu.user, "knowledge.site_registered", "knowledge_source", s.id, url=base)
+    db.commit()
+    job = _site_job(db, s, cu, {"mode": "crawl"}) if body.fetch_now else None
+    return {**_site_out(db, s), "job_id": job.id if job else None}
+
+
+class SiteUpdate(BaseModel):
+    title: str | None = None
+    product: str | None = None
+    product_version: str | None = None
+    label: str | None = None
+    page_limit: int | None = None
+    delay_ms: int | None = None
+
+
+@router.patch("/sites/{sid}")
+def update_site(sid: int, body: SiteUpdate, cu: CurrentUser = Depends(require("knowledge.register_url")),
+                db: Session = Depends(get_db)):
+    s, sec = _site(db, cu, sid)
+    for k in ("title", "product", "product_version", "label"):
+        v = getattr(body, k)
+        if v is not None:
+            setattr(s, k, v)
+    if body.product is not None or body.product_version is not None or body.label is not None:
+        for p in db.scalars(site_sync.pages_query(s)):  # pages carry the site's product and version into answers
+            p.product, p.product_version, p.label = s.product, s.product_version, s.label
+            db.execute(DocumentChunk.__table__.update().where(DocumentChunk.source_id == p.id).values(
+                meta={"product": s.product, "version": s.product_version, "document_type": p.document_type}))
+    cfg = {}
+    if body.page_limit is not None:
+        cfg["page_limit"] = max(1, min(body.page_limit, sites.MAX_LIMIT))
+    if body.delay_ms is not None:
+        cfg["delay_ms"] = max(100, min(body.delay_ms, 5000))
+    if cfg:
+        site_sync.save_config(db, s.id, cfg)
+    audit(db, cu.user, "knowledge.site_updated", "knowledge_source", s.id, **{k: str(v) for k, v in body.model_dump().items() if v is not None})
+    db.commit()
+    return _site_out(db, s, sec)
+
+
+@router.post("/sites/{sid}/sync")
+def sync_site(sid: int, cu: CurrentUser = Depends(require("knowledge.register_url")), db: Session = Depends(get_db)):
+    s, _sec = _site(db, cu, sid)
+    return {"job_id": _site_job(db, s, cu, {"mode": "crawl"}).id}
+
+
+@router.post("/sites/{sid}/import")
+async def import_site_zip(sid: int, file: UploadFile = File(...), cu: CurrentUser = Depends(require("knowledge.upload")),
+                          db: Session = Depends(get_db)):
+    """Pages saved with the crawl script on a machine that has internet access."""
+    s, _sec = _site(db, cu, sid)
+    data = await file.read()
+    try:
+        m = sites.read_manifest(zipfile.ZipFile(io.BytesIO(data)).read(sites.ZIP_MANIFEST))
+    except (KeyError, ValueError, zipfile.BadZipFile) as e:
+        raise HTTPException(400, f"Not a ZIP made by the crawl script: {e}")
+    if sites.base_url(m.get("base") or "") != s.url:
+        raise HTTPException(400, f"This ZIP was made for {m.get('base')}, not {s.url}")
+    f = save_file(db, data, file.filename or "site.zip", "knowledge", cu.id, "application/zip", allowed={".zip"})
+    return {"job_id": _site_job(db, s, cu, {"mode": "zip", "file_id": f.id}).id, "pages": len(m["pages"])}
+
+
+@router.get("/sites/{sid}/pages")
+def site_pages(sid: int, q: str = "", status: str = "", offset: int = 0, cu: CurrentUser = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    s, _sec = _site(db, cu, sid)
+    query = site_sync.pages_query(s)
+    if q:
+        query = query.where(KnowledgeSource.title.ilike(f"%{q}%") | KnowledgeSource.url.ilike(f"%{q}%"))
+    if status == "Failed":
+        query = query.where(KnowledgeSource.ingest_status == "Failed")
+    elif status:
+        query = query.where(KnowledgeSource.status == status)
+    total = db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = db.scalars(query.order_by(KnowledgeSource.url).offset(max(0, offset)).limit(100)).all()
+    return {"total": total, "pages": [{"id": p.id, "title": p.title, "url": p.url, "status": p.status,
+                                       "ingest_status": p.ingest_status, "error": p.ingest_error,
+                                       "version": p.current_version, "fetched_at": p.last_fetch_ok_at} for p in rows]}
+
+
+@router.get("/sites-crawl-script")
+def crawl_script(cu: CurrentUser = Depends(require("knowledge.upload"))):
+    """The stand-alone script that saves a docs site to a ZIP on a machine with internet access."""
+    data = (Path(__file__).parent / "docs_crawl_to_zip.py").read_bytes()
+    return Response(data, media_type="text/x-python",
+                    headers={"Content-Disposition": 'attachment; filename="docs_crawl_to_zip.py"'})
+
+
+# ---------- past pre-bid query sheets ----------
+def _sheet_rows(data: bytes, name: str) -> list[tuple[str, str, list[str]]]:
+    try:
+        return [(seg.section, seg.ref, list(seg.cells)) for seg in extract(data, name).segments]
+    except ExtractionError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/prebid/preview")
+async def preview_prebid(file: UploadFile = File(...), cu: CurrentUser = Depends(require("knowledge.upload"))):
+    """What an import would read from a past pre-bid query sheet: the detected columns and the first queries."""
+    queries, cols = prebid_sheet.parse_rows(_sheet_rows(await file.read(), file.filename or "sheet.xlsx"))
+    return {"columns": cols, "queries": len(queries), "sample": queries[:5]}
+
+
+@router.post("/prebid")
+async def import_prebid(customer: str = Form(...), tender: str = Form(""), date_text: str = Form(""),
+                        outcome: str = Form(""), product: str = Form("Both"), file: UploadFile = File(...),
+                        cu: CurrentUser = Depends(require("knowledge.upload")), db: Session = Depends(get_db)):
+    """Store a past pre-bid query sheet as knowledge (Internal presales knowledge, awaiting approval)."""
+    sec = db.scalar(select(KnowledgeSection).where(KnowledgeSection.key == "internal_presales_knowledge"))
+    if not sec:
+        raise HTTPException(400, "The Internal presales knowledge section does not exist")
+    _section_or_403(db, cu, sec.id)
+    data = await file.read()
+    queries, _cols = prebid_sheet.parse_rows(_sheet_rows(data, file.filename or "sheet.xlsx"))
+    if not queries:
+        raise HTTPException(400, "No pre-bid queries found: the sheet needs a header row with a Query / Clarification column")
+    original = save_file(db, data, file.filename or "prebid.xlsx", "knowledge", cu.id, file.content_type or "")
+    md = prebid_sheet.to_markdown({"customer": customer, "tender": tender, "date": date_text, "outcome": outcome}, queries)
+    title = f"{prebid_sheet.TITLE_PREFIX}{customer}" + (f" ({tender})" if tender else "")
+    f = save_file(db, md.encode("utf-8"), f"{re.sub(r'[^A-Za-z0-9 ._-]+', '', title)[:120]}.md", "knowledge", cu.id,
+                  "text/markdown", allowed={".md"})
+    s = KnowledgeSource(section_id=sec.id, kind="file", title=title[:300], product=product,
+                        document_type="Past pre-bid queries", label="internal", created_by=cu.id)
+    db.add(s)
+    db.flush()
+    job = _new_version(db, s, f, cu.id)
+    audit(db, cu.user, "knowledge.prebid_imported", "knowledge_source", s.id, customer=customer, queries=len(queries),
+          original_file=original.id)
+    db.commit()
+    return {**source_out(s, sec), "job_id": job.id, "queries": len(queries)}
+
+
+@router.post("/submitted/preview")
+async def preview_submitted(compliance_sheet: UploadFile = File(...), cu: CurrentUser = Depends(require("submitted.upload"))):
+    """Check a past compliance sheet before importing: detected columns, number of rows, a sample."""
+    data = await compliance_sheet.read()
+    try:
+        return preview_compliance_sheet(data, compliance_sheet.filename or "sheet.xlsx")
+    except ExtractionError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------- Submitted RFP repository (§6.4) ----------

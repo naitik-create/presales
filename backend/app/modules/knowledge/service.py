@@ -180,11 +180,14 @@ ON_END["knowledge.reindex"] = _reindex_failed
 
 def section_stats(db: Session) -> dict[int, dict]:
     rows = db.execute(select(KnowledgeSource.section_id, KnowledgeSource.status, func.count())
+                      .where(KnowledgeSource.kind != "page")  # a docs site counts once, not per page
                       .group_by(KnowledgeSource.section_id, KnowledgeSource.status)).all()
     out: dict[int, dict] = {}
     for sid, status, n in rows:
         out.setdefault(sid, {})[status] = n
     return out
 
+
+from app.modules.knowledge import site_sync  # noqa: E402,F401  (registers knowledge.site_sync for the worker)
 
 __all__ = ["ingest", "reindex", "fetch_url", "domain_allowed", "section_stats", "KnowledgeSection"]
